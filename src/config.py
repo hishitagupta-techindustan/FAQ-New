@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     """Application settings"""
     
     # API Keys
-    openai_api_key: str 
+    openai_api_key: str = "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"
     openai_model_large : str = "gpt-4o"
     langchain_api_key: Optional[str] = None
     
@@ -39,8 +39,13 @@ class Settings(BaseSettings):
     chunk_overlap: int = 200
     
     # ChromaDB
-    chroma_persist_directory: str = "../data/vectordb"
-    chroma_collection_name: str = "insurance_documents"
+    chroma_persist_directory: str = "/home/hishita/Desktop/Projects/FAQ New/data/vectordb"
+    chroma_collection_name: str = "zucora_insurance_documents"
+    reset_vector_store : bool = True
+    
+    # MongoDb 
+    mongodb_uri : str ="mongodb+srv://hishitagupta_db_user:UGtdfvm7BJV5xAjh@cluster0.t7gcm7s.mongodb.net/?appName=Cluster0"
+    mongodb_db : str ="zucora"
     
     # Caching
     cache_ttl: int = 3600  # 1 hour
@@ -55,7 +60,11 @@ class Settings(BaseSettings):
     
     # Paths
     data_dir: Path = Path("./data")
-    pdf_dir: Path = Path("./data/pdfs")
+    pdf_dir: Path = Path("./data/pdfs/zucora.pdf")
+    
+    # Product name
+    default_product_name : str ="zucora"
+    
     
     class Config:
         env_file = ".env"
@@ -64,8 +73,8 @@ class Settings(BaseSettings):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # Create directories if they don't exist
-        self.data_dir.mkdir(exist_ok=True)
-        self.pdf_dir.mkdir(exist_ok=True)
+        # self.data_dir.mkdir(exist_ok=True)
+        # self.pdf_dir.mkdir(exist_ok=True)
         Path(self.chroma_persist_directory).mkdir(parents=True, exist_ok=True)
 
 

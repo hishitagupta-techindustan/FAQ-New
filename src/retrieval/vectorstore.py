@@ -8,7 +8,7 @@ from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 from loguru import logger
 
-from src.utils.pdf_processor import DocumentChunk
+from utils.pdf_processor import DocumentChunk
 
 
 class VectorStore:
@@ -16,7 +16,7 @@ class VectorStore:
     
     def __init__(
         self,
-        collection_name: str = "insurance_documents",
+        collection_name: str = "zucora_insurance_documents",
         persist_directory: str = "./data/vectordb",
         embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     ):
@@ -210,3 +210,93 @@ class VectorStore:
             metadata={"hnsw:space": "cosine"}
         )
         logger.info(f"Reset collection: {self.collection_name}")
+        
+    def add_structured_documents(self, documents: list):
+        texts = [doc["text"] for doc in documents]
+        metadatas = [doc["metadata"] for doc in documents]
+        ids = [doc["id"] for doc in documents]
+
+        self.collection.add(
+            documents=texts,
+            metadatas=metadatas,
+            ids=ids
+        )
+        
+    def similarity_search(
+    self,
+    query: str,
+    k: int ,
+    filter_metadata: Optional[Dict[str, Any]] = None
+) -> List[Dict[str, Any]]:
+        """
+        Perform semantic similarity search using cosine distance.
+
+        Args:
+            query: User search query
+            k: Number of top results to return
+            filter_metadata: Optional metadata filters (e.g., {"product": "health_insurance"})
+
+        Returns:
+            List of dictionaries:
+            [
+                {
+                    "id": str,
+                    "text": str,
+                    "metadata": dict,
+                    "score": float   # cosine similarity (0–1)
+                }
+            ]
+        """
+
+        if not query.strip():
+            logger.warning("Empty query received for similarity search")
+            return []
+
+        # Generate embedding for query
+        query_embedding = self.embedding_model.encode(
+            query,
+            convert_to_numpy=True
+        ).tolist()
+        
+        print(self.collection)
+
+        try:
+            results = self.collection.query(
+                query_embeddings=[query_embedding],
+                n_results=k,
+                where=filter_metadata
+            )
+            print(results)
+        except Exception as e:
+            logger.error(f"Chroma query failed: {e}")
+            return []
+
+        formatted_results = []
+
+        if not results or not results.get("ids"):
+            return []
+
+        ids = results.get("ids", [[]])[0]
+        documents = results.get("documents", [[]])[0]
+        metadatas = results.get("metadatas", [[]])[0]
+        distances = results.get("distances", [[]])[0]
+
+        for i in range(len(ids)):
+            distance = distances[i] if distances else None
+
+            # Convert cosine distance → similarity score
+            similarity_score = 1 - distance if distance is not None else None
+
+            formatted_results.append({
+                "id": ids[i],
+                "text": documents[i],
+                "metadata": metadatas[i],
+                "score": similarity_score
+            })
+
+        logger.debug(f"Similarity search returned {len(formatted_results)} results")
+        
+        
+
+        return formatted_results
+

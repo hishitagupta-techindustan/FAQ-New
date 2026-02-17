@@ -376,3 +376,20 @@ Cache + Return
 4. **Collaboration**
    - Multi-user sessions
    - Shared knowledge base
+
+
+
+   ---------------------------------------------------
+
+
+   Ingestion:
+PDF → Text → LLM → Structured JSON → Embed → Store
+
+Runtime:
+User Query
+    ↓
+Vector match FAQ
+    ↓
+High confidence?
+    ↓ YES → Return structured FAQ
+    ↓ NO  → RAG fallback

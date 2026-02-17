@@ -1,16 +1,7 @@
 
-"""
-Streamlit web application for Insurance FAQ Chatbot - FIXED VERSION WITH STREAMING
-"""
 import streamlit as st
-from pathlib import Path
-import sys
 from typing import List, Dict
 from loguru import logger
-
-# Add src to path
-# sys.path.insert(0, str(Path(__file__).parent))
-
 from config import settings
 from src.retrieval.vectorstore import VectorStore
 from src.agents.graph import RAGOrchestrator
@@ -20,11 +11,9 @@ from src.utils.cache import cache_manager
 # Configure logger
 logger.add("logs/app.log", rotation="1 day", retention="7 days")
 
-
 # Page config
 st.set_page_config(
     page_title="Insurance FAQ Assistant",
-    page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -77,7 +66,7 @@ def initialize_system():
             logger.info(f"Vector store loaded with {doc_count} documents")
         
         # Initialize orchestrator
-        orchestrator = RAGOrchestrator(
+        orchestrator =  RAGOrchestrator(
             vector_store=vector_store,
             use_reranker=True
         )
@@ -99,58 +88,6 @@ def initialize_security():
         window_seconds=60
     )
 
-
-# def render_sidebar():
-#     """Render sidebar with settings and info"""
-#     with st.sidebar:
-#         st.title("⚙️ Settings")
-        
-#         # Session management
-#         st.subheader("Session")
-#         if st.button("Clear Chat History"):
-#             st.session_state.messages = []
-#             st.session_state.conversation_history = []
-#             st.rerun()
-        
-#         # Cache stats
-#         st.subheader("📊 Performance")
-#         stats = cache_manager.get_stats()
-        
-#         col1, col2 = st.columns(2)
-#         with col1:
-#             st.metric("Cache Hits", stats['hits'])
-#             st.metric("Hit Rate", f"{stats['hit_rate']:.1%}")
-#         with col2:
-#             st.metric("Cache Misses", stats['misses'])
-#             st.metric("Cache Size", stats['cache_size'])
-        
-#         if st.button("Clear Cache"):
-#             cache_manager.clear()
-#             st.success("Cache cleared!")
-#             st.rerun()
-        
-#         # System info
-#         st.subheader("ℹ️ System Info")
-#         _, vector_store = initialize_system()
-#         if vector_store:
-#             doc_count = vector_store.count_documents()
-#             st.info(f"📚 Documents in database: {doc_count}")
-        
-#         st.info(f"🤖 Model: {settings.llm_model}")
-        
-#         # About
-#         st.subheader("About")
-#         st.markdown("""
-#         This AI assistant helps answer questions about insurance policies 
-#         using advanced retrieval and generation techniques.
-        
-#         **Features:**
-#         - 🔍 Semantic search
-#         - 📝 Source citations
-#         - 💬 Context-aware responses
-#         - 🔒 Security protected
-#         - ⚡ Streaming responses
-#         """)
 
 
 def render_message(message: Dict):
