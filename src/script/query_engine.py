@@ -33,7 +33,8 @@ class SessionMemory:
                session_id: str,
                topic: Optional[str] = None,
                question: Optional[str] = None,
-               user_query: Optional[str] = None):
+               user_query: Optional[str] = None,
+               ):
 
         session = self.get(session_id)
 
@@ -78,21 +79,21 @@ class StructuredFAQEngine:
 
         best = results[0]
         
-        if best["score"] is None or best["score"] < 0.50:
+        if best["score"] is None or best["score"] < 0.40:
             logger.info("No strong FAQ match found.")
             return None
 
         score = best["metadata"].get("score", 0.0) if hasattr(best, "metadata") else 0.0
 
         # You may adjust threshold
-        if score and score < 0.50:
+        if score and score < 0.40:
             return None
 
         topic_id = best["metadata"].get("topic_id")
 
         question = best["metadata"].get("question")
 
-        topic_data = self.collection.find_one({
+        topic_data = self.collection.find_one({ # mongodb collection
             "product": product,
             "topic_id": topic_id
         })
@@ -102,11 +103,20 @@ class StructuredFAQEngine:
 
         for faq in topic_data["faqs"]:
             if faq["question"] == question:
+                print({
+                    "topic_id": topic_id,
+                    "question": question,
+                    "answer_blocks": faq["answer_blocks"],
+                    "related":faq["related"]
+                })
                 return {
                     "topic_id": topic_id,
                     "question": question,
-                    "answer_blocks": faq["answer_blocks"]
+                    "answer_blocks": faq["answer_blocks"],
+                    "related":faq["related"]
                 }
+                
+                
 
         return None
 
@@ -158,7 +168,7 @@ Instructions:
 3. If you cannot find the answer in the context, say so clearly
 4. Be clear, concise, and accurate
 5. If the question is ambiguous, ask for clarification
-6. Answer in 3 small blocks of under 20 words.
+6. Answer in 3 small blocks of under 50 words.
 """
 
         response = self.llm.invoke(prompt)
@@ -199,13 +209,15 @@ class InsuranceQueryEngine:
                 session_id,
                 topic=faq_match["topic_id"],
                 question=faq_match["question"],
-                user_query=user_query
+                user_query=user_query,
+                
             )
 
             return {
                 "source": "structured_faq",
                 "topic": faq_match["topic_id"],
-                "answer_blocks": faq_match["answer_blocks"]
+                "answer_blocks": faq_match["answer_blocks"],
+                "related":faq_match["related"]
             }
 
         # ===============================

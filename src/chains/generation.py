@@ -40,7 +40,7 @@ class AnswerGenerator:
         
         context_text = self._format_context(context_docs)
         # print(context_text)
-        logger.debug(f"Formatted context: {context_text[:200]}...")  # Fixed: use logger instead of print
+        logger.debug(f"Formatted context: {context_text}...")  # Fixed: use logger instead of print
         
         history_text = self._format_history(conversation_history or [])
         logger.debug(f"Formatted history: {history_text[:200]}...")  # Fixed: use logger instead of print

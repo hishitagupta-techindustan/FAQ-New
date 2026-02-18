@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Zucora — Insurance Assistant</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet"/>
+<style>
+/* ═══════════════════════════════════════════
+   TOKENS
+═══════════════════════════════════════════ */
+:root {
+  --bg:       #F0F0EC;
+  --card:     #FFFFFF;
+  --border:   #E4E4DC;
+  --text:     #1A1A18;
+  --muted:    #888880;
+  --accent:   #2D5BE3;
+  --accent2:  #6C3DDB;
+  --green:    #1DB366;
+  --pill-bg:  #EEEAE6;
+  --pill-hover: #E0DCD8;
+  --shadow:   0 2px 12px rgba(0,0,0,0.07);
+  --shadow-lg:0 8px 32px rgba(0,0,0,0.12);
+  --font-head:'Syne', sans-serif;
+  --font-body:'DM Sans', sans-serif;
+  --r:        14px;
+  --r-lg:     22px;
+}
+
+/* ═══════════════════════════════════════════
+   RESET & BASE
+═══════════════════════════════════════════ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 15px; -webkit-font-smoothing: antialiased; }
+body {
+  font-family: var(--font-body);
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ═══════════════════════════════════════════
+   LAYOUT
+═══════════════════════════════════════════ */
+.page {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto 1fr;
+  min-height: 100vh;
+}
+
+/* ── Navbar ── */
+nav {
+  grid-column: 1/-1;
+  display: flex;
+  align-items: center;
+  padding: 18px 48px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  position: sticky; top: 0; z-index: 10;
+}
+.nav-logo {
+  font-family: var(--font-head);
+  font-weight: 800;
+  font-size: 1.2rem;
+  letter-spacing: -0.3px;
+  color: var(--text);
+  display: flex; align-items: center; gap: 8px;
+}
+.nav-logo span { color: var(--accent); }
+.nav-status {
+  margin-left: auto;
+  display: flex; align-items: center; gap: 6px;
+  font-size: 0.78rem; color: var(--muted);
+}
+.dot-green { width:7px; height:7px; border-radius:50%; background:var(--green); display:inline-block; }
+
+/* ═══════════════════════════════════════════
+   LEFT PANEL
+═══════════════════════════════════════════ */
+.left-panel {
+  padding: 52px;
+  display: flex;
+  align-items: center;
+  /* flex-direction: column; */
+  gap: 28px;
+  border-right: 1px solid var(--border);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Hero orb */
+.hero-orb-wrap {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  position: relative;
+  height: 220px;
+  margin-bottom: 4px;
+}
+.hero-orb {
+  width: 170px; height: 170px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 36%, #6db8ff 0%, #3D6EE8 38%, #5B2FD4 70%, #9B3DD8 100%);
+  box-shadow: 0 20px 60px rgba(61,110,232,0.35), inset 0 -10px 30px rgba(0,0,0,0.15);
+  position: relative;
+  animation: float 4s ease-in-out infinite;
+  flex-shrink: 0;
+}
+/* eyes */
+.hero-orb::before, .hero-orb::after {
+  content:'';
+  position:absolute;
+  top:52px; width:22px; height:30px;
+  background:#fff; border-radius:50%;
+}
+.hero-orb::before { left:44px; }
+.hero-orb::after  { right:44px; }
+@keyframes float {
+  0%,100% { transform: translateY(0px); }
+  50%      { transform: translateY(-10px); }
+}
+
+/* Floating pills around orb */
+.pill {
+  position:absolute;
+  background:#fff;
+  border: 1px solid var(--border);
+  border-radius: 30px;
+  padding: 9px 16px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text);
+  box-shadow: var(--shadow);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.18s, transform 0.18s, box-shadow 0.18s;
+  animation: float 4s ease-in-out infinite;
+}
+.pill:hover { background: var(--accent); color:#fff; transform:scale(1.04); box-shadow:var(--shadow-lg); }
+.pill-1 { top:10px; left:0px; animation-delay:0s; }
+.pill-2 { top:10px; right:0px; animation-delay:0.6s; }
+.pill-3 { bottom:10px; left:10px; animation-delay:1s; }
+.pill-4 { bottom:10px; right:10px; animation-delay:1.6s; }
+
+/* Quick action cards */
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 22px 24px;
+  box-shadow: var(--shadow);
+}
+.card-title {
+  font-family: var(--font-head);
+  font-weight: 700;
+  font-size: 1rem;
+  margin-bottom: 14px;
+  color: var(--text);
+}
+
+.action-list { display:flex; flex-direction:column; gap:2px; }
+.action-item {
+  display:flex; align-items:center; gap:12px;
+  padding: 12px 6px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+.action-item:last-of-type { border-bottom:none; }
+.action-item:hover { background: var(--pill-bg); }
+.action-icon {
+  width:30px; height:30px;
+  border-radius: 50%;
+  background: var(--pill-bg);
+  display:flex; align-items:center; justify-content:center;
+  font-size:0.9rem; flex-shrink:0;
+}
+.action-label { flex:1; font-size:0.88rem; font-weight:400; }
+.action-arr { color:var(--muted); font-size:0.8rem; }
+
+/* Ask something else input in left card */
+.mini-input-wrap {
+  display:flex; align-items:center; gap:8px;
+  margin-top:12px;
+  border:1px solid var(--border);
+  border-radius:30px;
+  padding:9px 14px;
+  background:var(--bg);
+  transition:border-color 0.2s;
+}
+.mini-input-wrap:focus-within { border-color:var(--accent); }
+.mini-input-wrap input {
+  flex:1; border:none; outline:none;
+  background:transparent; font-family:var(--font-body);
+  font-size:0.84rem; color:var(--text);
+}
+.mini-input-wrap input::placeholder { color:var(--muted); }
+.mini-send {
+  background:var(--accent); border:none; border-radius:50%;
+  width:28px; height:28px; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  transition:background 0.18s;
+  flex-shrink:0;
+}
+.mini-send:hover { background:var(--accent2); }
+.mini-send svg { width:14px; height:14px; fill:none; stroke:#fff; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+
+/* Two-col layout for the two cards */
+.cards-row { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+
+/* ═══════════════════════════════════════════
+   RIGHT PANEL — HERO TEXT + CHAT TRIGGER
+═══════════════════════════════════════════ */
+.right-panel {
+  padding: 52px 48px 48px;
+  display:flex; flex-direction:column;
+  justify-content:center;
+  gap:28px;
+}
+.hero-heading {
+  font-family: var(--font-head);
+  font-size: clamp(2.4rem, 4vw, 3.5rem);
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -1.5px;
+  color: var(--text);
+}
+.hero-heading em { font-style:normal; color:var(--accent); }
+.hero-sub {
+  font-size:1rem; color:var(--muted); line-height:1.6;
+  max-width: 380px;
+}
+.chat-now-btn {
+  display:inline-flex; align-items:center; gap:10px;
+  background:var(--text); color:#fff;
+  border:none; border-radius:50px;
+  padding:16px 36px;
+  font-family:var(--font-head);
+  font-size:1rem; font-weight:700;
+  cursor:pointer;
+  transition:background 0.2s, transform 0.15s, box-shadow 0.2s;
+  box-shadow:0 4px 20px rgba(0,0,0,0.18);
+  align-self:flex-start;
+}
+.chat-now-btn:hover { background:var(--accent); transform:translateY(-2px); box-shadow:0 8px 28px rgba(45,91,227,0.35); }
+.chat-now-btn .btn-dot { width:9px; height:9px; border-radius:50%; background:var(--green); flex-shrink:0; }
+
+.meta-row {
+  display:flex; align-items:center; gap:18px;
+  font-size:0.8rem; color:var(--muted);
+}
+.meta-row .sep { color:var(--border); }
+.meta-item { display:flex; align-items:center; gap:5px; }
+
+/* ═══════════════════════════════════════════
+   CHAT DRAWER (slide-in from right)
+═══════════════════════════════════════════ */
+.chat-overlay {
+  position:fixed; inset:0; background:rgba(0,0,0,0.25);
+  z-index:100; opacity:0; pointer-events:none;
+  transition:opacity 0.3s;
+}
+.chat-overlay.open { opacity:1; pointer-events:all; }
+
+.chat-drawer {
+  position:fixed;
+  top:0; right:0; bottom:0;
+  width:400px;
+  background:var(--card);
+  z-index:101;
+  display:flex; flex-direction:column;
+  box-shadow:-8px 0 40px rgba(0,0,0,0.14);
+  transform:translateX(100%);
+  transition:transform 0.35s cubic-bezier(0.34,1.1,0.64,1);
+  border-radius: var(--r-lg) 0 0 var(--r-lg);
+}
+.chat-drawer.open { transform:translateX(0); }
+
+/* Drawer header */
+.drawer-header {
+  display:flex; align-items:center; gap:12px;
+  padding:18px 20px;
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;
+}
+.drawer-avatar {
+  width:38px; height:38px; border-radius:50%;
+  background:linear-gradient(135deg,#3D6EE8,#9B3DD8);
+  display:flex; align-items:center; justify-content:center;
+  font-size:1rem;
+}
+.drawer-title { font-family:var(--font-head); font-weight:700; font-size:0.95rem; }
+.drawer-sub { font-size:0.72rem; color:var(--green); display:flex; align-items:center; gap:4px; }
+.drawer-close {
+  margin-left:auto; background:none; border:none;
+  cursor:pointer; color:var(--muted); font-size:1.3rem; line-height:1;
+  transition:color 0.15s;
+}
+.drawer-close:hover { color:var(--text); }
+
+/* Messages area */
+.drawer-msgs {
+  flex:1; overflow-y:auto; padding:16px 18px;
+  display:flex; flex-direction:column; gap:14px;
+  scroll-behavior:smooth;
+}
+.drawer-msgs::-webkit-scrollbar { width:4px; }
+.drawer-msgs::-webkit-scrollbar-track { background:transparent; }
+.drawer-msgs::-webkit-scrollbar-thumb { background:var(--border); border-radius:4px; }
+
+/* Timestamp */
+.ts { text-align:center; font-size:0.68rem; color:var(--muted); margin:4px 0; }
+
+/* Bubble */
+.bubble-wrap { display:flex; flex-direction:column; gap:4px; }
+.bubble-wrap.user { align-items:flex-end; }
+.bubble-wrap.bot  { align-items:flex-start; }
+
+.bubble {
+  max-width:82%;
+  padding:11px 15px;
+  border-radius:18px;
+  font-size:0.875rem;
+  line-height:1.55;
+  animation:popIn 0.22s cubic-bezier(0.34,1.3,0.64,1);
+}
+@keyframes popIn { from{opacity:0;transform:scale(0.92) translateY(6px)} to{opacity:1;transform:none} }
+
+.bubble.user { background:var(--accent); color:#fff; border-bottom-right-radius:5px; }
+.bubble.bot  { background:#F5F4F0; color:var(--text); border-bottom-left-radius:5px; }
+.bubble-source { font-size:0.62rem; color:var(--muted); font-weight:500; text-transform:uppercase; letter-spacing:0.07em; }
+
+/* FAQ answer blocks */
+.ab { padding:5px 0; border-top:1px solid var(--border); font-size:0.84rem; }
+.ab:first-child { border-top:none; }
+
+/* Quick reply chips */
+.quick-chips { display:flex; flex-direction:column; gap:7px; margin-top:4px; }
+.chip {
+  display:flex; align-items:center; justify-content:space-between;
+  border:1.5px solid var(--accent);
+  border-radius:10px;
+  padding:9px 13px;
+  font-size:0.82rem;
+  color:var(--accent);
+  cursor:pointer;
+  background:#fff;
+  transition:background 0.15s, color 0.15s;
+  font-weight:500;
+}
+.chip:hover { background:var(--accent); color:#fff; }
+.chip-arr { font-size:0.75rem; }
+
+/* Typing indicator */
+.typing { display:flex; gap:4px; align-items:center; padding:12px 14px; }
+.typing span {
+  width:7px; height:7px; border-radius:50%;
+  background:var(--muted); display:block;
+  animation:bounce 1.2s ease-in-out infinite;
+}
+.typing span:nth-child(2) { animation-delay:0.2s; }
+.typing span:nth-child(3) { animation-delay:0.4s; }
+@keyframes bounce { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-6px)} }
+
+/* Input area */
+.drawer-input-area {
+  border-top:1px solid var(--border);
+  padding:14px 18px;
+  position:relative;
+  flex-shrink:0;
+}
+
+/* Suggestions dropdown */
+#suggestions-dd {
+  position:absolute;
+  bottom:100%; left:18px; right:18px;
+  background:#fff;
+  border:1px solid var(--border);
+  border-radius:var(--r) var(--r) 0 0;
+  box-shadow:0 -6px 24px rgba(0,0,0,0.10);
+  display:none;
+  overflow:hidden;
+  max-height:260px;
+  overflow-y:auto;
+  z-index:10;
+}
+#suggestions-dd.vis { display:block; }
+#suggestions-dd::-webkit-scrollbar { width:3px; }
+#suggestions-dd::-webkit-scrollbar-thumb { background:var(--border); }
+
+.sugg-item {
+  display:flex; align-items:center; gap:10px;
+  padding:11px 16px;
+  cursor:pointer;
+  border-top:1px solid #F1F1EE;
+  transition:background 0.1s;
+  font-size:0.875rem;
+  color:var(--text);
+}
+.sugg-item:first-child { border-top:none; }
+.sugg-item:hover { background:#F5F4F0; }
+.sugg-item:hover .sugg-q { color:var(--accent); }
+.sugg-item:hover .sugg-arr { color:var(--accent); transform:translateX(3px); }
+.sugg-ico { color:var(--muted); font-size:0.8rem; flex-shrink:0; }
+.sugg-q { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; transition:color 0.1s; }
+.sugg-q strong { font-weight:600; color:var(--accent); }
+.sugg-badge {
+  font-size:0.58rem; font-weight:700;
+  padding:2px 7px; border-radius:8px;
+  text-transform:uppercase; letter-spacing:0.07em; flex-shrink:0;
+}
+.b-kw  { background:#FEF3E2; color:#D4840A; }
+.b-sem { background:#EBF0FE; color:var(--accent); }
+.b-bt  { background:#F0EBFE; color:var(--accent2); }
+.sugg-arr { color:#C8C8C0; font-size:0.75rem; transition:color 0.15s, transform 0.15s; flex-shrink:0; }
+
+.sugg-loading {
+  padding:12px 16px; display:flex; align-items:center; gap:8px;
+  color:var(--muted); font-size:0.82rem;
+}
+.sugg-spin {
+  width:12px; height:12px; border:2px solid #E0E0E0;
+  border-top-color:var(--accent); border-radius:50%;
+  animation:spin 0.7s linear infinite; flex-shrink:0;
+}
+@keyframes spin { to{transform:rotate(360deg)} }
+
+/* Chat input row */
+.input-row {
+  display:flex; align-items:center; gap:8px;
+  background:var(--bg);
+  border:1.5px solid var(--border);
+  border-radius:30px;
+  padding:10px 14px;
+  transition:border-color 0.2s, box-shadow 0.2s;
+}
+.input-row:focus-within {
+  border-color:var(--accent);
+  box-shadow:0 0 0 3px rgba(45,91,227,0.08);
+}
+.input-row.dd-open {
+  border-radius:0 0 30px 30px;
+  border-top-color:var(--border);
+}
+#chat-input {
+  flex:1; border:none; outline:none;
+  background:transparent; font-family:var(--font-body);
+  font-size:0.9rem; color:var(--text);
+}
+#chat-input::placeholder { color:var(--muted); }
+.send-btn {
+  background:var(--accent); border:none; border-radius:50%;
+  width:34px; height:34px; flex-shrink:0;
+  cursor:pointer; display:flex; align-items:center; justify-content:center;
+  transition:background 0.18s, transform 0.15s;
+}
+.send-btn:hover { background:var(--accent2); transform:scale(1.05); }
+.send-btn:disabled { background:#C5CAE9; cursor:not-allowed; transform:none; }
+.send-btn svg { width:16px; height:16px; fill:none; stroke:#fff; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
+
+/* ═══════════════════════════════════════════
+   RESPONSIVE
+═══════════════════════════════════════════ */
+@media (max-width:900px) {
+  .page { grid-template-columns:1fr; }
+  .left-panel { border-right:none; border-bottom:1px solid var(--border); padding:32px 24px; }
+  .right-panel { padding:32px 24px; }
+  nav { padding:14px 24px; }
+  .chat-drawer { width:100%; border-radius:var(--r-lg) var(--r-lg) 0 0; top:auto; height:92vh; transform:translateY(100%); }
+  .chat-drawer.open { transform:translateY(0); }
+  .cards-row { grid-template-columns:1fr; }
+}
+
+/* Stagger animation on load */
+.fade-up { opacity:0; transform:translateY(20px); animation:fadeUp 0.5s forwards; }
+@keyframes fadeUp { to{opacity:1;transform:none} }
+.d1{animation-delay:0.05s} .d2{animation-delay:0.12s} .d3{animation-delay:0.2s}
+.d4{animation-delay:0.28s} .d5{animation-delay:0.36s} .d6{animation-delay:0.44s}
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <!-- ── NAV ── -->
+  <nav>
+    <div class="nav-logo">🛡️ Zucora</div>
+    <div class="nav-status">
+      <span class="dot-green"></span> Available 24 × 7
+    </div>
+  </nav>
+
+  <!-- ════════════════════════════════════════
+       LEFT PANEL
+  ════════════════════════════════════════ -->
+  <div class="left-panel">
+
+    <!-- Orb + pills -->
+    <!-- <div class="hero-orb-wrap fade-up d1">
+      <div class="hero-orb"></div>
+      <div class="pill pill-1" onclick="openChat('Renew your policy')">Renew your policy</div>
+      <div class="pill pill-2" onclick="openChat('Check if a specific disease is covered')">Check disease coverage</div>
+      <div class="pill pill-3" onclick="openChat('Download your policy copy')">Download policy copy</div>
+      <div class="pill pill-4" onclick="openChat('What does my policy cover?')">What does my policy cover?</div>
+    </div> -->
+
+    <!-- Two quick-action cards -->
+    <div class="cards-row fade-up d2">
+
+      <!-- Policy quick actions -->
+      <div class="card">
+        <div class="card-title">Policy quick actions</div>
+        <div class="action-list">
+          <div class="action-item" onclick="openChat('Raise a claim')">
+            <div class="action-icon">📋</div>
+            <span class="action-label">Raise a claim</span>
+            <span class="action-arr">→</span>
+          </div>
+          <div class="action-item" onclick="openChat('Get update on existing claims')">
+            <div class="action-icon">🔄</div>
+            <span class="action-label">Get update on existing claims</span>
+            <span class="action-arr">→</span>
+          </div>
+          <div class="action-item" onclick="openChat('Make changes to policy')">
+            <div class="action-icon">✏️</div>
+            <span class="action-label">Make changes to policy</span>
+            <span class="action-arr">→</span>
+          </div>
+          <div class="action-item" onclick="openChat('Renew policy')">
+            <div class="action-icon">🛡️</div>
+            <span class="action-label">Renew policy</span>
+            <span class="action-arr">→</span>
+          </div>
+          <div class="action-item" onclick="openChat('Download policy or e-cards')">
+            <div class="action-icon">⬇️</div>
+            <span class="action-label">Download policy or e-cards</span>
+            <span class="action-arr">→</span>
+          </div>
+        </div>
+        <!-- mini ask input -->
+        <div class="mini-input-wrap" id="mini-wrap-1">
+          <input type="text" placeholder="Ask something else…" id="mini-1" onkeydown="miniSend(event,'mini-1')"/>
+          <button class="mini-send" onclick="miniSendBtn('mini-1')">
+            <svg viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Explore insurance -->
+      <div class="card">
+        <div class="card-title">Explore insurance</div>
+        <div class="action-list">
+          <div class="action-item" onclick="openChat('Check disease coverages')">
+            <div class="action-icon">🔍</div>
+            <span class="action-label">Check disease coverages</span>
+            <span class="action-arr">→</span>
+          </div>
+          <div class="action-item" onclick="openChat('Compare plans and prices')">
+            <div class="action-icon">📊</div>
+            <span class="action-label">Compare plans and prices</span>
+            <span class="action-arr">→</span>
+          </div>
+          <div class="action-item" onclick="openChat('How do I switch to Zucora?')">
+            <div class="action-icon">↔️</div>
+            <span class="action-label">Switch to Zucora</span>
+            <span class="action-arr">→</span>
+          </div>
+          <div class="action-item" onclick="openChat('How do cashless claims work?')">
+            <div class="action-icon">💳</div>
+            <span class="action-label">Learn how cashless claims work</span>
+            <span class="action-arr">→</span>
+          </div>
+          <div class="action-item" onclick="openChat('Check network hospitals')">
+            <div class="action-icon">🏥</div>
+            <span class="action-label">Check network hospitals</span>
+            <span class="action-arr">→</span>
+          </div>
+        </div>
+        <div class="mini-input-wrap" id="mini-wrap-2">
+          <input type="text" placeholder="Ask something else…" id="mini-2" onkeydown="miniSend(event,'mini-2')"/>
+          <button class="mini-send" onclick="miniSendBtn('mini-2')">
+            <svg viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════
+       RIGHT PANEL
+  ════════════════════════════════════════ -->
+  <div class="right-panel">
+    <h1 class="hero-heading fade-up d3">How can<br/>we <em>help?</em></h1>
+    <p class="hero-sub fade-up d4">Get instant answers about your coverage, claims, and policy details — powered by Zucora's AI assistant.</p>
+    <button class="chat-now-btn fade-up d5" onclick="openChat()">
+      <span class="btn-dot"></span> Chat now
+    </button>
+    <div class="meta-row fade-up d6">
+      <div class="meta-item"><span class="dot-green"></span> Available 24 × 7</div>
+      <span class="sep">|</span>
+      <div class="meta-item">⚡ Quick replies</div>
+      <span class="sep">|</span>
+      <div class="meta-item">🛡️ Secure & private</div>
+    </div>
+  </div>
+
+</div><!-- /page -->
+
+
+<!-- ════════════════════════════════════════
+     CHAT DRAWER
+════════════════════════════════════════ -->
+<div class="chat-overlay" id="overlay" onclick="closeChat()"></div>
+
+<div class="chat-drawer" id="drawer">
+
+  <div class="drawer-header">
+    <div class="drawer-avatar">🛡️</div>
+    <div>
+      <div class="drawer-title">Zucora Assistant</div>
+      <div class="drawer-sub"><span class="dot-green"></span> Available on chat 24×7</div>
+    </div>
+    <button class="drawer-close" onclick="closeChat()">✕</button>
+  </div>
+
+  <div class="drawer-msgs" id="msgs"></div>
+
+  <div class="drawer-input-area">
+    <!-- Suggestions dropdown — sits above input -->
+    <div id="suggestions-dd"></div>
+
+    <div class="input-row" id="input-row">
+      <input type="text" id="chat-input" placeholder="How can we help?" autocomplete="off"
+             oninput="onType()" onkeydown="onKey(event)"/>
+      <button class="send-btn" id="send-btn" onclick="sendMsg()" disabled>
+        <svg viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+
+<script>
+/* ════════════════════════════════════════
+   CONFIG
+════════════════════════════════════════ */
+const API     = 'http://localhost:8000';
+const PRODUCT = 'zucora';
+let   SESSION = crypto.randomUUID();
+
+/* ════════════════════════════════════════
+   DRAWER OPEN / CLOSE
+════════════════════════════════════════ */
+function openChat(prefill) {
+  document.getElementById('overlay').classList.add('open');
+  document.getElementById('drawer').classList.add('open');
+  document.body.style.overflow = 'hidden';
+
+  if (!document.getElementById('msgs').children.length) {
+    addTs('Now');
+    addBotMsg(
+      "👋 Hi! I'm Zucora's AI assistant. Ask me anything about your policy, claims, or coverage.",
+      'rag'
+    );
+  }
+
+  if (prefill) {
+    document.getElementById('chat-input').value = prefill;
+    document.getElementById('send-btn').disabled = false;
+    setTimeout(sendMsg, 200);
+  } else {
+    setTimeout(() => document.getElementById('chat-input').focus(), 350);
+  }
+}
+
+function closeChat() {
+  document.getElementById('overlay').classList.remove('open');
+  document.getElementById('drawer').classList.remove('open');
+  document.body.style.overflow = '';
+  closeSugg();
+}
+
+function miniSend(e, id) { if (e.key === 'Enter') miniSendBtn(id); }
+function miniSendBtn(id) {
+  const v = document.getElementById(id).value.trim();
+  if (!v) return;
+  document.getElementById(id).value = '';
+  openChat(v);
+}
+
+/* ════════════════════════════════════════
+   SUGGESTIONS
+════════════════════════════════════════ */
+let suggTimer = null, curQ = '', suggHits = [];
+
+function onType() {
+  const v = document.getElementById('chat-input').value;
+  curQ = v.trim();
+  document.getElementById('send-btn').disabled = !curQ;
+
+  if (curQ.length < 2) { closeSugg(); return; }
+
+  showSuggLoad();
+  clearTimeout(suggTimer);
+  suggTimer = setTimeout(() => fetchSugg(curQ), 310);
+}
+
+async function fetchSugg(q) {
+  if (q !== curQ) return;
+  try {
+    const r = await fetch(`${API}/suggest`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({partial_query: q, product: PRODUCT})
+    });
+    const data = await r.json();
+    if (q !== curQ) return;
+    suggHits = data.suggestions || [];
+    renderSugg(suggHits, q);
+  } catch(e) { closeSugg(); }
+}
+
+function renderSugg(list, q) {
+  const dd = document.getElementById('suggestions-dd');
+  if (!list.length) {
+    dd.innerHTML = '<div class="sugg-loading" style="color:#aaa">No suggestions found</div>';
+    openSugg(); return;
+  }
+  const esc = q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  dd.innerHTML = list.map((s,i) => {
+    const bc = {keyword:'b-kw',semantic:'b-sem',both:'b-bt'}[s.match_type]||'b-sem';
+    const hl = s.question.replace(new RegExp(`(${esc})`,'gi'),'<strong>$1</strong>');
+    return `<div class="sugg-item" onclick="pickSugg(${i})">
+      <span class="sugg-ico">🔎</span>
+      <span class="sugg-q">${hl}</span>
+      <span class="sugg-badge ${bc}">${s.match_type}</span>
+      <span class="sugg-arr">→</span>
+    </div>`;
+  }).join('');
+  openSugg();
+}
+
+function showSuggLoad() {
+  document.getElementById('suggestions-dd').innerHTML =
+    '<div class="sugg-loading"><div class="sugg-spin"></div>Finding suggestions…</div>';
+  openSugg();
+}
+
+function openSugg() {
+  document.getElementById('suggestions-dd').classList.add('vis');
+  document.getElementById('input-row').classList.add('dd-open');
+}
+function closeSugg() {
+  document.getElementById('suggestions-dd').classList.remove('vis');
+  document.getElementById('input-row').classList.remove('dd-open');
+}
+
+function pickSugg(i) {
+  const s = suggHits[i]; if(!s) return;
+  const inp = document.getElementById('chat-input');
+  inp.value = s.question; curQ = s.question;
+  document.getElementById('send-btn').disabled = false;
+  closeSugg();
+  sendMsg();
+}
+
+function onKey(e) {
+  if (e.key === 'Enter' && curQ) sendMsg();
+  if (e.key === 'Escape') closeSugg();
+}
+
+/* Close suggestions when clicking outside */
+document.addEventListener('click', e => {
+  if (!e.target.closest('.drawer-input-area')) closeSugg();
+});
+
+/* ════════════════════════════════════════
+   CHAT
+════════════════════════════════════════ */
+function sendMsg() {
+  const inp = document.getElementById('chat-input');
+  const q   = inp.value.trim();
+  if (!q) return;
+  inp.value = ''; curQ = '';
+  document.getElementById('send-btn').disabled = true;
+  closeSugg();
+
+  addUserMsg(q);
+  addTyping();
+
+  callChat(q).then(result => {
+    removeTyping();
+    if (result.source === 'structured_faq' && result.answer_blocks?.length) {
+      addFAQMsg(result.answer_blocks, result.topic);
+    } else {
+      addBotMsg(result.answer || '⚠️ No answer returned.', result.source || 'rag');
+    }
+  }).catch(e => {
+    removeTyping();
+    addBotMsg('⚠️ Could not reach the server. Make sure FastAPI is running at ' + API, 'error');
+  });
+}
+
+async function callChat(query) {
+  const r = await fetch(`${API}/chat`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({session_id: SESSION, product: PRODUCT, user_query: query})
+  });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+
+/* ════════════════════════════════════════
+   MESSAGE RENDERERS
+════════════════════════════════════════ */
+function msgs() { return document.getElementById('msgs'); }
+
+function addTs(label) {
+  const d = document.createElement('div');
+  d.className = 'ts'; d.textContent = label;
+  msgs().appendChild(d); scroll();
+}
+
+function addUserMsg(text) {
+  const w = document.createElement('div');
+  w.className = 'bubble-wrap user';
+  w.innerHTML = `<div class="bubble user">${esc(text)}</div>`;
+  msgs().appendChild(w); scroll();
+}
+
+function addBotMsg(text, source) {
+  const color = source === 'structured_faq' ? '#1DB366' : source === 'error' ? '#D44' : '#888';
+  const label = source === 'structured_faq' ? 'Structured FAQ' : source === 'error' ? 'Error' : 'AI Answer';
+  const w = document.createElement('div');
+  w.className = 'bubble-wrap bot';
+  w.innerHTML = `
+    <div class="bubble-source" style="color:${color}">${label}</div>
+    <div class="bubble bot">${esc(text)}</div>`;
+  msgs().appendChild(w); scroll();
+}
+
+function addFAQMsg(blocks, topic) {
+  const w = document.createElement('div');
+  w.className = 'bubble-wrap bot';
+  let body = '';
+  for (const b of blocks) {
+    if (b.type === 'text')
+      body += `<div class="ab">${esc(b.content||'')}</div>`;
+    else if (b.type === 'list')
+      body += `<div class="ab"><ul style="padding-left:16px;margin:3px 0">${(b.items||[]).map(i=>`<li>${esc(i)}</li>`).join('')}</ul></div>`;
+    else if (b.type === 'link')
+      body += `<div class="ab">🔗 <a href="${b.url||'#'}" target="_blank" style="color:var(--accent)">${esc(b.label||b.url||'')}</a></div>`;
+  }
+  w.innerHTML = `
+    <div class="bubble-source" style="color:var(--green)">📋 Structured FAQ${topic?' · '+esc(topic):''}</div>
+    <div class="bubble bot" style="padding:10px 14px">${body}</div>`;
+  msgs().appendChild(w); scroll();
+}
+
+function addTyping() {
+  const w = document.createElement('div');
+  w.className = 'bubble-wrap bot'; w.id = 'typing-ind';
+  w.innerHTML = `<div class="bubble bot" style="padding:4px 8px">
+    <div class="typing"><span></span><span></span><span></span></div></div>`;
+  msgs().appendChild(w); scroll();
+}
+function removeTyping() {
+  const t = document.getElementById('typing-ind');
+  if (t) t.remove();
+}
+
+function scroll() {
+  const m = msgs();
+  m.scrollTop = m.scrollHeight;
+}
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/\n/g,'<br>');
+}
+</script>
+</body>
+</html>

@@ -123,13 +123,16 @@ Instructions:
 3. Cite specific sections or page numbers when possible
 4. Be clear, concise, and accurate
 5. If the question is ambiguous, ask for clarification
+6. If the question is not related to Zucora and retreived context, answer by connecting the intended answer and zucora in a witty way.
 
 Answer:"""
 
 
-FOLLOWUP_QUESTIONS_PROMPT = """Based on the user's question and the answer provided, suggest 3 relevant follow-up questions they might ask.
+FOLLOWUP_QUESTIONS_PROMPT = """Based on the user's question, the answer provided and the context, suggest 3 relevant follow-up questions they might ask. If the query is unrelated to zucora, add followup questions based on retrieved docs.
 
 User Question: {query}
 Answer: {answer}
+Context: {context}
+
 
 Generate 3 follow-up questions (one per line, without numbering):"""

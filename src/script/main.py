@@ -17,6 +17,8 @@ from typing import Optional, List, Any
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from suggestions_engine import SuggestionEngine
+
 
 # ─── Import your existing engine directly ────────────────────────────────────
 # Make sure query_engine.py is in the same directory as this file
@@ -43,6 +45,7 @@ app.add_middleware(
 
 # Single shared engine instance — holds all in-memory sessions
 engine = InsuranceQueryEngine()
+suggestion_engine = SuggestionEngine()
 
 
 # =====================================================
@@ -61,11 +64,31 @@ class ChatResponse(BaseModel):
     topic: Optional[str] = None                  # filled for structured FAQ hits
     answer_blocks: Optional[List[Any]] = None    # structured blocks (FAQ path)
     answer: Optional[str] = None                 # plain-text answer (RAG path)
+    related:Optional[List[str]] = None
 
 
 class SessionHistoryResponse(BaseModel):
     session_id: str
     history: List[str]
+    
+
+class SuggestionRequest(BaseModel):
+    partial_query: str
+    product: Optional[str] = "zucora"
+
+
+class SuggestionItem(BaseModel):
+    question: str
+    topic_id: str
+    topic_name: str
+    match_type: str   # "keyword" | "semantic" | "both"
+    score: float
+
+
+class SuggestionResponse(BaseModel):
+    suggestions: List[SuggestionItem]
+    query: str
+
 
 
 # =====================================================
@@ -79,17 +102,15 @@ def root():
 
 @app.post("/chat", response_model=ChatResponse, tags=["Chat"])
 def chat(request: ChatRequest):
-    """
-    Main chat endpoint — used for BOTH:
-      • Predefined clickable questions  e.g. "Raise a claim"
-      • Free-form typed queries         e.g. "what does my plan cover?"
-
-    Flow (mirrors your InsuranceQueryEngine.handle_query):
-      1. Try structured FAQ  →  ChromaDB vector search → MongoDB fetch
-      2. Fallback to RAG     →  OpenAI LLM + retrieved context
-    """
-    # Auto-generate session_id when the frontend opens a new chat popup
+    # Use provided session_id or generate a new one
     session_id = request.session_id or str(uuid.uuid4())
+
+    # Check if existing session has history and log/restore if needed
+    existing_session = engine.memory.get(session_id)
+    if existing_session:
+        history = existing_session.get("history", [])
+    else:
+        history = []
 
     try:
         result = engine.handle_query(
@@ -99,15 +120,17 @@ def chat(request: ChatRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
+    
+    print(result)
+    
     return ChatResponse(
         session_id=session_id,
         source=result.get("source"),
         topic=result.get("topic"),
-        answer_blocks=result.get("answer_blocks"),  # populated for structured_faq
-        answer=result.get("answer"),                 # populated for rag
+        answer_blocks=result.get("answer_blocks"),
+        answer=result.get("answer"),
+        related=result.get("related")
     )
-
 
 @app.get("/session/{session_id}/history", response_model=SessionHistoryResponse, tags=["Session"])
 def get_session_history(session_id: str):
@@ -182,6 +205,39 @@ def get_predefined_questions(product: str = "zucora"):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+    
+@app.post("/suggest", response_model=SuggestionResponse, tags=["Suggestions"])
+def suggest(request: SuggestionRequest):
+    """
+    Live typeahead suggestions endpoint.
+
+    Call this on every keystroke (debounced ~300ms on frontend).
+    Returns 4-5 ranked FAQ questions matching the partial input
+    via keyword + semantic search.
+
+    Body:
+        partial_query (str): whatever the user has typed so far
+        product (str):       product scope, default "zucora"
+
+    Returns:
+        suggestions: list of ranked question matches with source + score
+    """
+    if not request.partial_query or not request.partial_query.strip():
+        return SuggestionResponse(suggestions=[], query=request.partial_query)
+
+    try:
+        results = suggestion_engine.suggest(
+            partial_query=request.partial_query.strip(),
+            product=request.product,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return SuggestionResponse(
+        suggestions=[SuggestionItem(**r) for r in results],
+        query=request.partial_query,
+    )
 
 
 # =====================================================
