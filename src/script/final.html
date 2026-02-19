@@ -798,10 +798,12 @@ function sendMsg() {
     removeTyping();
     if (result.source === 'structured_faq' && result.answer_blocks?.length) {
       addFAQMsg(result.answer_blocks, result.topic);
+      if (result.link_url) addLinkBlock(result.link_url, result.link_id);
       const suggested = (result.related || []).slice(0, 3);
       if (suggested.length) addSuggestedQuestions(suggested);
     } else {
       addBotMsg(result.answer || '⚠️ No answer returned.', result.source || 'rag');
+      if (result.link_url) addLinkBlock(result.link_url, result.link_id);
       const followups = await fetchFollowupSuggestions(q, 3);
       if (followups.length) addSuggestedQuestions(followups);
     }
@@ -868,6 +870,19 @@ function addFAQMsg(blocks, topic) {
   w.innerHTML = `
     <div class="bubble-source" style="color:var(--green)">📋 Structured FAQ${topic?' · '+esc(topic):''}</div>
     <div class="bubble bot" style="padding:10px 14px">${body}</div>`;
+  msgs().appendChild(w); scroll();
+}
+
+function addLinkBlock(url, linkId) {
+  const w = document.createElement('div');
+  w.className = 'bubble-wrap bot';
+  const label = linkId ? `Also check: ${esc(linkId)}` : 'Also check:';
+  w.innerHTML = `
+    
+    <div class="bubble bot" style="padding:10px 14px ">
+      <div class="ab">🔗 <a href="${escAttr(url)}" target="_blank" style="color:var(--accent)">${esc(linkId)}</a></div>
+    </div>
+  `;
   msgs().appendChild(w); scroll();
 }
 

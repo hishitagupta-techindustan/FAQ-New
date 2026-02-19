@@ -1,15 +1,14 @@
 """
 SuggestionEngine — live "search-as-you-type" suggestions
 Combines:
-  • Keyword match  → scans MongoDB FAQ question strings (fast, exact)
-  • Semantic match → ChromaDB vector similarity (slower, meaning-aware)
+  • Keyword match  → computed from retrieved vector candidates (no MongoDB scan)
+  • Semantic match → ChromaDB vector similarity (meaning-aware)
 Results are merged, deduplicated, and ranked.
 """
 
 import re
 from typing import List, Dict, Any
 from loguru import logger
-from pymongo import MongoClient
 
 import sys
 from pathlib import Path
@@ -36,14 +35,16 @@ class SuggestionEngine:
     SEMANTIC_THRESHOLD = 0.25
 
     def __init__(self):
-        self.vector_store = VectorStore(
+        self.question_store = VectorStore(
             collection_name=settings.chroma_collection_name_questions,
             persist_directory=settings.chroma_persist_directory,
             embedding_model=settings.embedding_model
         )
-        self.mongo = MongoClient(settings.mongodb_uri)
-        self.db = self.mongo[settings.mongodb_db]
-        self.collection = self.db["structured_faqs"]
+        self.rag_store = VectorStore(
+            collection_name=settings.chroma_collection_name_rag,
+            persist_directory=settings.chroma_persist_directory,
+            embedding_model=settings.embedding_model
+        )
 
     # ------------------------------------------------------------------
     # PUBLIC
@@ -68,66 +69,31 @@ class SuggestionEngine:
         if len(query) < self.MIN_QUERY_LENGTH:
             return []
 
-        keyword_hits = self._keyword_search(query, product)
-        semantic_hits = self._semantic_search(query, product)
+        candidates = self._semantic_candidates(query, product)
+        keyword_hits = self._keyword_search(query, candidates)
+        semantic_hits = self._semantic_hits(candidates)
 
         merged = self._merge_and_rank(keyword_hits, semantic_hits)
         return merged[: self.MAX_SUGGESTIONS]
 
     # ------------------------------------------------------------------
-    # KEYWORD SEARCH  (MongoDB)
+    # KEYWORD SEARCH  (Candidates)
     # ------------------------------------------------------------------
 
-    def _keyword_search(self, query: str, product: str) -> List[Dict[str, Any]]:
+    def _keyword_search(self, query: str, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Case-insensitive regex match against every FAQ question string
-        stored in MongoDB.  Splits the query into individual words and
-        requires ALL of them to appear somewhere in the question.
+        Case-insensitive keyword scoring over retrieved candidates.
+        Splits the query into individual words and scores by coverage.
         """
         words = [w for w in re.split(r"\W+", query) if len(w) > 1]
 
         if not words:
             return []
 
-        # Build an AND of per-word regex filters on the nested faqs.question field
-        word_filters = [
-            {"faqs.question": {"$regex": word, "$options": "i"}}
-            for word in words
-        ]
-
-        pipeline = [
-            # Filter to correct product and topics that have at least one matching word
-            {"$match": {"product": product, "$and": word_filters}},
-            {"$limit": self.KEYWORD_FETCH_LIMIT},
-            # Unwind so we can score individual FAQ entries
-            {"$unwind": "$faqs"},
-            {
-                "$match": {
-                    "$and": [
-                        {"faqs.question": {"$regex": word, "$options": "i"}}
-                        for word in words
-                    ]
-                }
-            },
-            {
-                "$project": {
-                    "_id": 0,
-                    "topic_id": 1,
-                    "topic_name": 1,
-                    "question": "$faqs.question",
-                }
-            },
-        ]
-
-        try:
-            docs = list(self.collection.aggregate(pipeline))
-        except Exception as e:
-            logger.error(f"Keyword search error: {e}")
-            return []
-
         results = []
-        for doc in docs:
-            q_lower = doc["question"].lower()
+        for doc in candidates:
+            q_text = doc.get("question") or ""
+            q_lower = q_text.lower()
             q_lower_query = query.lower()
 
             # Simple relevance: boost if query appears as a contiguous substring
@@ -136,62 +102,71 @@ class SuggestionEngine:
             else:
                 # Score by fraction of query words matched
                 matched = sum(1 for w in words if w.lower() in q_lower)
+                if matched == 0:
+                    continue
                 score = 0.50 + 0.30 * (matched / len(words))
 
             results.append({
-                "question":   doc["question"],
+                "question":   q_text,
                 "topic_id":   doc.get("topic_id", ""),
                 "topic_name": doc.get("topic_name", doc.get("topic_id", "")),
                 "match_type": "keyword",
                 "score":      round(score, 3),
             })
 
-        return results
+        return results[: self.KEYWORD_FETCH_LIMIT]
 
     # ------------------------------------------------------------------
     # SEMANTIC SEARCH  (ChromaDB)
     # ------------------------------------------------------------------
 
-    def _semantic_search(self, query: str, product: str) -> List[Dict[str, Any]]:
+    def _semantic_candidates(self, query: str, product: str) -> List[Dict[str, Any]]:
         """
-        Embeds the partial query and runs vector similarity search.
-        Filters out low-confidence hits via SEMANTIC_THRESHOLD.
+        Retrieve semantic candidates from both question and RAG stores.
         """
+        candidates: List[Dict[str, Any]] = []
         try:
-            raw = self.vector_store.similarity_search(query, k=self.SEMANTIC_FETCH_LIMIT)
+            q_hits = self.question_store.similarity_search(
+                query,
+                k=self.SEMANTIC_FETCH_LIMIT,
+                filter_metadata={"product": product}
+            )
+            r_hits = self.rag_store.similarity_search(
+                query,
+                k=self.SEMANTIC_FETCH_LIMIT,
+                filter_metadata={"product": product}
+            )
         except Exception as e:
             logger.error(f"Semantic search error: {e}")
             return []
 
-        results = []
-        for hit in raw:
-            score = hit.get("score") or 0.0
-
-            if score < self.SEMANTIC_THRESHOLD:
-                continue
-
+        for hit in (q_hits + r_hits):
             meta = hit.get("metadata", {})
-            topic_id = meta.get("topic_id", "")
             question = meta.get("question", hit.get("text", ""))
-
             if not question:
                 continue
+            candidates.append({
+                "question": question,
+                "topic_id": meta.get("topic_id", ""),
+                "topic_name": meta.get("topic_id", ""),
+                "score": hit.get("score")
+            })
 
-            # Fetch topic_name from MongoDB (cached lookup would be an optimization)
-            topic_doc = self.collection.find_one(
-                {"product": product, "topic_id": topic_id},
-                {"_id": 0, "topic_name": 1}
-            )
-            topic_name = topic_doc.get("topic_name", topic_id) if topic_doc else topic_id
+        return candidates
 
+    def _semantic_hits(self, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        results = []
+        for c in candidates:
+            score = c.get("score") or 0.0
+            if score < self.SEMANTIC_THRESHOLD:
+                continue
             results.append({
-                "question":   question,
-                "topic_id":   topic_id,
-                "topic_name": topic_name,
+                "question":   c.get("question", ""),
+                "topic_id":   c.get("topic_id", ""),
+                "topic_name": c.get("topic_name", ""),
                 "match_type": "semantic",
                 "score":      round(float(score), 3),
             })
-
         return results
 
     # ------------------------------------------------------------------
@@ -222,7 +197,7 @@ class SuggestionEngine:
                 # Combine
                 kw_score = merged[key]["score"]
                 sem_score = hit["score"]
-                merged[key]["score"] = round(0.4 * kw_score + 0.6 * sem_score, 3)
+                merged[key]["score"] = 0.4 * kw_score + 0.6 * sem_score
                 merged[key]["match_type"] = "both"
             else:
                 merged[key] = hit.copy()

@@ -19,6 +19,7 @@ import fitz
 from typing import List, Optional
 from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
+from typing import Dict
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -36,6 +37,8 @@ class FAQItem(BaseModel):
     question_variations: List[str] = Field(..., min_items=4, max_items=5)
     answer_blocks: List[str] = Field(..., min_items=2, max_items=3)
     related: List[str] = Field(..., min_items=1, max_items=3)
+    link_id: Optional[str] = None
+    link_url: Optional[str] = None
     next_prompt: Optional[str] = None
 
 
@@ -74,7 +77,7 @@ def extract_full_text(pdf_path: Path) -> str:
 # --------- LLM Structured FAQ Generation ------------
 # =====================================================
 
-def generate_structured_faq(text: str) -> dict:
+def generate_structured_faq(text: str, extra_prompt: Optional[str] = None) -> dict:
     """Generate structured FAQ JSON using Pydantic schema."""
 
     logger.info("Initializing LLM...")
@@ -197,6 +200,8 @@ Return STRICTLY valid JSON matching this structure:
             "string",
             "string"
           ],
+          "link_id": "string or null",
+          "link_url": "string or null",
           "answer_blocks": [
             "string",
             "string",
@@ -221,11 +226,89 @@ Return JSON only.
 
     logger.info("Calling LLM for structured FAQ generation...")
 
-    response = structured_llm.invoke(prompt + "\n\nDOCUMENT:\n" + text)
+    final_prompt = prompt
+    if extra_prompt:
+        final_prompt += "\n\n" + extra_prompt.strip() + "\n"
+
+    response = structured_llm.invoke(final_prompt + "\n\nDOCUMENT:\n" + text)
 
     logger.info("LLM structured output received.")
 
     return response.model_dump()
+
+
+def load_links_from_xlsx(xlsx_path: Path) -> List[Dict[str, str]]:
+    """
+    Load link_id/link_url pairs from an XLSX file.
+    Expects first two columns to be: link_id, link_url (header optional).
+    """
+    try:
+        from openpyxl import load_workbook
+    except Exception as e:
+        raise RuntimeError("openpyxl is required to read .xlsx files") from e
+
+    wb = load_workbook(filename=str(xlsx_path), read_only=True, data_only=True)
+    ws = wb.active
+
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        return []
+
+    # Detect header row
+    start_idx = 0
+    header = [str(c).strip().lower() if c is not None else "" for c in rows[0]]
+    if "link_id" in header or "linkid" in header or "link" in header:
+        start_idx = 1
+
+    links = []
+    for row in rows[start_idx:]:
+        if not row or len(row) < 2:
+            continue
+        link_id = str(row[0]).strip() if row[0] is not None else ""
+        link_url = str(row[1]).strip() if row[1] is not None else ""
+        if not link_id or not link_url:
+            continue
+        links.append({"link_id": link_id, "link_url": link_url})
+
+    return links
+
+
+def store_links_in_mongodb(product_name: str, links: List[Dict[str, str]]) -> None:
+    if not links:
+        return
+    client = MongoClient(settings.mongodb_uri)
+    db = client[settings.mongodb_db]
+    collection = db["link_metadata"]
+
+    for item in links:
+        collection.update_one(
+            {"product": product_name, "link_id": item["link_id"]},
+            {"$set": {"product": product_name, "link_id": item["link_id"], "link_url": item["link_url"]}},
+            upsert=True
+        )
+
+
+def add_links_to_faqs(structured_data: dict, product_name: str) -> dict:
+    client = MongoClient(settings.mongodb_uri)
+    db = client[settings.mongodb_db]
+    collection = db["link_metadata"]
+
+    link_map: Dict[str, str] = {}
+    for doc in collection.find({"product": product_name}, {"_id": 0, "link_id": 1, "link_url": 1}):
+        link_id = doc.get("link_id")
+        link_url = doc.get("link_url")
+        if link_id and link_url:
+            link_map[link_id] = link_url
+
+    for topic in structured_data.get("topics", []):
+        for faq in topic.get("faqs", []):
+            link_id = faq.get("link_id")
+            if link_id:
+                faq["link_url"] = link_map.get(link_id)
+            else:
+                faq["link_url"] = None
+
+    return structured_data
 
 
 def enrich_structured_faq(structured_data: dict, product_name: str) -> dict:
@@ -295,6 +378,7 @@ def embed_and_store(structured_data: dict,
         for idx, faq in enumerate(topic["faqs"]):
             faq_id = faq.get("faq_id", f"{product_name}_{topic_id}_{idx}")
             question_variations = faq.get("question_variations", [])
+            link_id = faq.get("link_id")
 
             # Question suggestion store: one entry per question/variation
             all_questions = [faq["question"]] + question_variations
@@ -307,6 +391,7 @@ def embed_and_store(structured_data: dict,
                         "topic_id": topic_id,
                         "faq_id": faq_id,
                         "question": question_text.strip(),
+                        "link_id": link_id,
                         "question_type": "original" if q_idx == 0 else "variation",
                         "question_index": q_idx
                     }
@@ -327,6 +412,7 @@ def embed_and_store(structured_data: dict,
                     "product": product_name,
                     "topic_id": topic_id,
                     "faq_id": faq_id,
+                    "link_id": link_id,
                     "question": faq["question"]
                 }
             })
@@ -381,9 +467,28 @@ def run_ingestion(pdf_path: Path,
         logger.info("Extracting text from PDF...")
         text = extract_full_text(pdf_path)
 
+        # Step 1.5: Load optional link metadata
+        xlsx_candidates = list(Path(settings.data_dir).glob("*.xlsx"))
+        link_items: List[Dict[str, str]] = []
+        if xlsx_candidates:
+            link_items = load_links_from_xlsx(xlsx_candidates[0])
+            store_links_in_mongodb(product_name, link_items)
+
         # Step 2: Generate structured FAQ
-        structured_faq = generate_structured_faq(text)
+        if link_items:
+            link_ids = ", ".join([li["link_id"] for li in link_items])
+            link_prompt = f"""
+LINK METADATA:
+You may attach a relevant link_id to an FAQ ONLY if it directly helps the answer.
+Use ONLY these link_ids: {link_ids}
+If no link applies, set link_id to null.
+Do not invent ids or urls. Only output link_id; link_url must be null.
+"""
+            structured_faq = generate_structured_faq(text, extra_prompt=link_prompt)
+        else:
+            structured_faq = generate_structured_faq(text)
         structured_faq = enrich_structured_faq(structured_faq, product_name)
+        structured_faq = add_links_to_faqs(structured_faq, product_name)
 
         if len(structured_faq.get("topics", [])) < 10:
             logger.warning("LLM returned fewer than 10 topics; consider regenerating.")

@@ -217,7 +217,7 @@ class VectorStore:
             return
 
         texts = [doc["text"] for doc in documents]
-        metadatas = [doc["metadata"] for doc in documents]
+        metadatas = [self._sanitize_metadata(doc["metadata"]) for doc in documents]
         ids = [doc["id"] for doc in documents]
 
         logger.info("Generating embeddings for structured documents...")
@@ -233,6 +233,21 @@ class VectorStore:
             ids=ids,
             embeddings=embeddings
         )
+
+    def _sanitize_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Chroma metadata values must be str/int/float/bool. Remove None and
+        coerce unsupported types to strings.
+        """
+        clean: Dict[str, Any] = {}
+        for k, v in metadata.items():
+            if v is None:
+                continue
+            if isinstance(v, (str, int, float, bool)):
+                clean[k] = v
+            else:
+                clean[k] = str(v)
+        return clean
         
     def similarity_search(
         self,

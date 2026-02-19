@@ -68,6 +68,8 @@ class ChatResponse(BaseModel):
     answer_blocks: Optional[List[Any]] = None    # structured blocks (FAQ path)
     answer: Optional[str] = None                 # plain-text answer (RAG path)
     related:Optional[List[str]] = None
+    link_id: Optional[str] = None
+    link_url: Optional[str] = None
 
 
 class SessionHistoryResponse(BaseModel):
@@ -138,7 +140,9 @@ def chat(request: ChatRequest):
         topic=result.get("topic"),
         answer_blocks=result.get("answer_blocks"),
         answer=result.get("answer"),
-        related=result.get("related")
+        related=result.get("related"),
+        link_id=result.get("link_id"),
+        link_url=result.get("link_url")
     )
 
 @app.get("/session/{session_id}/history", response_model=SessionHistoryResponse, tags=["Session"])

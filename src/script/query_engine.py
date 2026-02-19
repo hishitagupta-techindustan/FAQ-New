@@ -66,6 +66,7 @@ class StructuredFAQEngine:
         self.mongo = MongoClient(settings.mongodb_uri)
         self.db = self.mongo[settings.mongodb_db]
         self.collection = self.db["structured_faqs"]
+        self.link_collection = self.db["link_metadata"]
 
     def search(self, query: str, product: str, k: int = 1):
         """
@@ -113,7 +114,9 @@ class StructuredFAQEngine:
                     "topic_id": topic_id,
                     "question": question,
                     "answer_blocks": faq["answer_blocks"],
-                    "related":faq["related"]
+                    "related":faq["related"],
+                    "link_id": faq.get("link_id"),
+                    "link_url": faq.get("link_url")
                 }
                 
                 
@@ -133,12 +136,16 @@ class RAGEngine:
             persist_directory=settings.chroma_persist_directory,
             embedding_model=settings.embedding_model
         )
+        self.mongo = MongoClient(settings.mongodb_uri)
+        self.db = self.mongo[settings.mongodb_db]
+        self.link_collection = self.db["link_metadata"]
 
         self.llm = ChatOpenAI(
             model=settings.openai_model_large,
             temperature=0.2,
             api_key=settings.openai_api_key
         )
+        self.link_min_score = 0.55
 
     def generate(self, query: str, memory_context: str):
 
@@ -168,12 +175,30 @@ Instructions:
 3. If you cannot find the answer in the context, say so clearly
 4. Be clear, concise, and accurate
 5. If the question is ambiguous, ask for clarification
-6. Answer in 3 small blocks of under 30 words without using the em dash.
+6. Answer in exactly 3 small blocks of under 30 words without using the em dash.
 7. Answers should be user centric yet professional.
 """
 
         response = self.llm.invoke(prompt)
-        return response.content
+        link_id = None
+        link_url = None
+        if docs:
+            # Pick the best-scoring doc with a link_id above threshold
+            for doc in docs:
+                score = doc.get("score")
+                meta = doc.get("metadata", {})
+                cand_id = meta.get("link_id")
+                if cand_id and score is not None and score >= self.link_min_score:
+                    link_id = cand_id
+                    link_doc = self.link_collection.find_one(
+                        {"product": settings.default_product_name, "link_id": link_id},
+                        {"_id": 0, "link_url": 1}
+                    )
+                    link_url = link_doc.get("link_url") if link_doc else None
+                    if link_url:
+                        break
+
+        return {"answer": response.content, "link_id": link_id, "link_url": link_url}
 
 
 # =====================================================
@@ -202,6 +227,8 @@ class InsuranceQueryEngine:
         # 1️⃣ Try Structured FAQ First
         # ===============================
         faq_match = self.faq_engine.search(user_query, product)
+        
+        print(faq_match)
 
         if faq_match:
             logger.info("Structured FAQ match found.")
@@ -214,12 +241,21 @@ class InsuranceQueryEngine:
                 
             )
 
-            return {
+            response_data = {
                 "source": "structured_faq",
                 "topic": faq_match["topic_id"],
                 "answer_blocks": faq_match["answer_blocks"],
-                "related":faq_match["related"]
+                "related": faq_match["related"],
             }
+
+            # Add only if present
+            if faq_match.get("link_id"):
+                response_data["link_id"] = faq_match["link_id"]
+
+            if faq_match.get("link_url"):
+                response_data["link_url"] = faq_match["link_url"]
+
+            return response_data
 
         # ===============================
         # 2️⃣ Fallback to RAG
@@ -245,7 +281,9 @@ Recent history: {session.get("history")[-3:]}
 
         return {
             "source": "rag",
-            "answer": rag_answer
+            "answer": rag_answer.get("answer") if isinstance(rag_answer, dict) else rag_answer,
+            "link_id": rag_answer.get("link_id") if isinstance(rag_answer, dict) else None,
+            "link_url": rag_answer.get("link_url") if isinstance(rag_answer, dict) else None
         }
 
 
