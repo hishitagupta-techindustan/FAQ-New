@@ -37,7 +37,7 @@ class SuggestionEngine:
 
     def __init__(self):
         self.vector_store = VectorStore(
-            collection_name=settings.chroma_collection_name,
+            collection_name=settings.chroma_collection_name_questions,
             persist_directory=settings.chroma_persist_directory,
             embedding_model=settings.embedding_model
         )

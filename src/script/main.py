@@ -8,16 +8,19 @@ Run with:
 
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 import uuid
 from typing import Optional, List, Any
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from suggestions_engine import SuggestionEngine
+from ingest_document_new import run_ingestion
 
 
 # ─── Import your existing engine directly ────────────────────────────────────
@@ -88,6 +91,12 @@ class SuggestionItem(BaseModel):
 class SuggestionResponse(BaseModel):
     suggestions: List[SuggestionItem]
     query: str
+
+
+class IngestResponse(BaseModel):
+    status: str
+    product: str
+    filename: str
 
 
 
@@ -174,28 +183,50 @@ def get_predefined_questions(product: str = "zucora"):
         # Reuse the already-open mongo connection inside faq_engine
         collection = engine.faq_engine.collection
 
-        # Fetch first 2 topic documents for the given product
-        topics_cursor = collection.find(
-            {"product": product},
-            {"_id": 0, "topic_id": 1, "topic_name": 1, "faqs": 1}
-        ).limit(2)
+        # # Fetch first 2 topic documents for the given product
+        # topics_cursor = collection.find(
+        #     {"product": product},
+        #     {"_id": 0, "topic_id": 1, "topic_name": 1, "faqs": 1}
+        # ).limit(2)
+        
+        topics_cursor = collection.aggregate([
+        {"$match": {"product": product}},
+        {
+            "$project": {
+                "_id": 0,
+                "topic_id": 1,
+                "topic_name": "$title",   # rename title → topic_name
+                "faqs": 1
+            }
+        },
+        {"$limit": 2}
+    ])
+        
+        
 
         topics = list(topics_cursor)
+        
+        # print(topics)
 
         if not topics:
             raise HTTPException(
                 status_code=404,
                 detail=f"No structured FAQs found for product='{product}'"
             )
+            
+       
 
         result = []
         for topic in topics:
             # Extract just the question text from each FAQ entry
             questions = [faq["question"] for faq in topic.get("faqs", [])]
 
+            topic_id = topic.get("topic_id")
+            topic_name = topic.get("topic_name") or topic_id
+
             result.append({
-                "topic_id":   topic.get("topic_id"),
-                "topic_name": topic.get("topic_name", topic.get("topic_id")), # fallback to topic_id if no display name
+                "topic_id":   topic_id,
+                "topic_name": topic_name,  # fallback to title/topic_id if no display name
                 "questions":  questions
             })
 
@@ -237,6 +268,83 @@ def suggest(request: SuggestionRequest):
     return SuggestionResponse(
         suggestions=[SuggestionItem(**r) for r in results],
         query=request.partial_query,
+    )
+
+
+@app.post("/ingest-pdf", response_model=IngestResponse, tags=["Ingestion"])
+def ingest_pdf(
+    file: UploadFile = File(None),
+    pdf_url: Optional[str] = Form(None),
+    product: str = Form("zucora"),
+    reset_vector_store: bool = Form(False)
+):
+    """
+    Upload a PDF or provide a PDF URL and run structured FAQ ingestion.
+    """
+    if file and file.filename:
+        if not file.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+    elif not pdf_url:
+        raise HTTPException(status_code=400, detail="Provide a PDF file or a pdf_url.")
+
+    upload_dir = _PROJECT_ROOT / "data" / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    max_bytes = 50 * 1024 * 1024  # 50 MB
+
+    if file and file.filename:
+        safe_name = f"{uuid.uuid4()}_{Path(file.filename).name}"
+        pdf_path = upload_dir / safe_name
+        try:
+            with pdf_path.open("wb") as f:
+                f.write(file.file.read())
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to save upload: {e}")
+    else:
+        parsed = urlparse(pdf_url)
+        if parsed.scheme not in {"http", "https"}:
+            raise HTTPException(status_code=400, detail="pdf_url must be http or https.")
+
+        url_name = Path(parsed.path).name or "document.pdf"
+        if not url_name.lower().endswith(".pdf"):
+            url_name = f"{url_name}.pdf"
+
+        safe_name = f"{uuid.uuid4()}_{url_name}"
+        pdf_path = upload_dir / safe_name
+
+        try:
+            req = Request(pdf_url, headers={"User-Agent": "ZucoraIngest/1.0"})
+            with urlopen(req, timeout=20) as resp, pdf_path.open("wb") as f:
+                content_type = resp.headers.get("Content-Type", "")
+                if "pdf" not in content_type.lower():
+                    raise HTTPException(status_code=400, detail="pdf_url did not return a PDF.")
+
+                total = 0
+                while True:
+                    chunk = resp.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise HTTPException(status_code=400, detail="PDF exceeds size limit (50 MB).")
+                    f.write(chunk)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to download pdf_url: {e}")
+
+    try:
+        run_ingestion(
+            pdf_path=pdf_path,
+            product_name=product,
+            reset_vector_store=reset_vector_store
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ingestion failed: {e}")
+
+    return IngestResponse(
+        status="ok",
+        product=product,
+        filename=pdf_path.name
     )
 
 

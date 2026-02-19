@@ -40,7 +40,8 @@ class Settings(BaseSettings):
     
     # ChromaDB
     chroma_persist_directory: str = "/home/hishita/Desktop/Projects/FAQ New/data/vectordb"
-    chroma_collection_name: str = "zucora_insurance_documents"
+    chroma_collection_name_questions: str = "zucora_insurance_questions"
+    chroma_collection_name_rag: str = "zucora_insurance_faqs_rag"
     reset_vector_store : bool = True
     
     # MongoDb 
@@ -59,8 +60,8 @@ class Settings(BaseSettings):
     allowed_origins: str = "http://localhost:8501,http://localhost:8000"
     
     # Paths
-    data_dir: Path = Path("./data")
-    pdf_dir: Path = Path("./data/pdfs/zucora.pdf")
+    data_dir: Path = Path("/home/hishita/Desktop/Projects/FAQ New/data")
+    pdf_dir: Path = Path("/home/hishita/Desktop/Projects/FAQ New/data/pdfs/zucora.pdf")
     
     # Product name
     default_product_name : str ="zucora"
@@ -118,12 +119,13 @@ Conversation History:
 User Question: {query}
 
 Instructions:
-1. Answer based ONLY on the provided context
-2. If you cannot find the answer in the context, say so clearly
-3. Cite specific sections or page numbers when possible
+1. If the question is not related to insurance, answer the question in short along with prompting the user to explore Zucora in a witty manner.
+2. Answer based ONLY on the provided context
+3. If you cannot find the answer in the context, say so clearly
 4. Be clear, concise, and accurate
 5. If the question is ambiguous, ask for clarification
-6. If the question is not related to Zucora and retreived context, answer by connecting the intended answer and zucora in a witty way.
+6. Answer in 3 small blocks of under 50 words without using the em dash.
+7. Answers should be user centric yet professional.
 
 Answer:"""
 

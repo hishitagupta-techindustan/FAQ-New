@@ -33,6 +33,7 @@ from retrieval.vectorstore import VectorStore
 
 class FAQItem(BaseModel):
     question: str = Field(..., min_length=5, max_length=120)
+    question_variations: List[str] = Field(..., min_items=4, max_items=5)
     answer_blocks: List[str] = Field(..., min_items=2, max_items=3)
     related: List[str] = Field(..., min_items=1, max_items=3)
     next_prompt: Optional[str] = None
@@ -97,7 +98,9 @@ Create a professional, customer-centric FAQ knowledge structure suitable for a m
 STRUCTURE REQUIREMENTS
 -----------------------------------------
 
-1. Extract 5–10 main topics from the document.
+1. Extract AT LEAST 10 main topics from the document (10–14 is ideal).
+   - Topics must be distinct, non-overlapping, and cover the full document breadth
+   - Prefer structured, insurance-domain categories over generic phrasing
 
 2. Each topic MUST include:
 
@@ -114,6 +117,12 @@ STRUCTURE REQUIREMENTS
        * Start with What / How / When / Can I / Does my / Why
        * Natural customer language
        * Short and mobile-friendly (max 12–14 words)
+
+   - question_variations:
+       * 4–5 professional rephrasings of the same question
+       * Keep meaning identical; vary phrasing and syntax
+       * Each should be short and customer-friendly
+       * Do not add new information
 
    - answer_blocks:
        * 3 blocks exactly
@@ -182,6 +191,12 @@ Return STRICTLY valid JSON matching this structure:
       "faqs": [
         {
           "question": "string",
+          "question_variations": [
+            "string",
+            "string",
+            "string",
+            "string"
+          ],
           "answer_blocks": [
             "string",
             "string",
@@ -211,6 +226,27 @@ Return JSON only.
     logger.info("LLM structured output received.")
 
     return response.model_dump()
+
+
+def enrich_structured_faq(structured_data: dict, product_name: str) -> dict:
+    """Add stable IDs and normalize question variations."""
+    for topic in structured_data.get("topics", []):
+        topic_id = topic.get("topic_id", "").strip()
+        for idx, faq in enumerate(topic.get("faqs", [])):
+            faq_id = f"{product_name}_{topic_id}_{idx}"
+            faq["faq_id"] = faq_id
+
+            variations = [v.strip() for v in faq.get("question_variations", []) if v and v.strip()]
+            # Ensure unique, preserve order
+            seen = set()
+            normalized = []
+            for v in variations:
+                if v not in seen:
+                    normalized.append(v)
+                    seen.add(v)
+            faq["question_variations"] = normalized
+
+    return structured_data
 
 
 # =====================================================
@@ -245,78 +281,100 @@ def store_in_mongodb(product_name: str, structured_data: dict):
 
 def embed_and_store(structured_data: dict,
                     product_name: str,
-                    vector_store: VectorStore):
+                    question_vector_store: VectorStore,
+                    rag_vector_store: VectorStore):
 
     logger.info("Preparing documents for embedding...")
 
-    documents = []
+    question_documents = []
+    rag_documents = []
 
     for topic in structured_data["topics"]:
         topic_id = topic["topic_id"]
 
         for idx, faq in enumerate(topic["faqs"]):
+            faq_id = faq.get("faq_id", f"{product_name}_{topic_id}_{idx}")
+            question_variations = faq.get("question_variations", [])
+
+            # Question suggestion store: one entry per question/variation
+            all_questions = [faq["question"]] + question_variations
+            for q_idx, question_text in enumerate(all_questions):
+                question_documents.append({
+                    "id": f"{faq_id}_q{q_idx}",
+                    "text": question_text.strip(),
+                    "metadata": {
+                        "product": product_name,
+                        "topic_id": topic_id,
+                        "faq_id": faq_id,
+                        "question": question_text.strip(),
+                        "question_type": "original" if q_idx == 0 else "variation",
+                        "question_index": q_idx
+                    }
+                })
 
             combined_text = f"""
             Product: {product_name}
             Topic: {topic['title']}
             Question: {faq['question']}
-            Question:{faq['question']}
+            Question Variations: {' | '.join(question_variations)}
             Answer: {' '.join(faq['answer_blocks'])}
             """
 
-            documents.append({
-                "id": f"{product_name}_{topic_id}_{idx}",
+            rag_documents.append({
+                "id": f"{faq_id}_rag",
                 "text": combined_text.strip(),
                 "metadata": {
                     "product": product_name,
                     "topic_id": topic_id,
+                    "faq_id": faq_id,
                     "question": faq["question"]
                 }
             })
 
-    vector_store.add_structured_documents(documents)
+    question_vector_store.add_structured_documents(question_documents)
+    rag_vector_store.add_structured_documents(rag_documents)
 
-    logger.info("Structured FAQ embedded into vector store.")
+    logger.info("Structured FAQ embedded into question and RAG vector stores.")
 
 
 # =====================================================
 # ---------------------- MAIN -------------------------
 # =====================================================
 
-def main():
+def run_ingestion(pdf_path: Path,
+                  product_name: str,
+                  reset_vector_store: bool = False) -> None:
     """
-    Simple structured ingestion runner.
-    Configure PDF path and product inside this function.
+    Structured ingestion runner for a specific PDF.
     """
-
-    # ===== CONFIGURATION =====
-    PDF_PATH = settings.pdf_dir
-    PRODUCT_NAME = settings.default_product_name
-    RESET_VECTOR_STORE = settings.reset_vector_store
-    # =========================
 
     logger.add("logs/structured_ingestion.log", rotation="1 day")
 
     logger.info("Starting structured ingestion...")
-    logger.info(f"PDF: {PDF_PATH}")
-    logger.info(f"Product: {PRODUCT_NAME}")
-
-    pdf_path = Path(PDF_PATH)
+    logger.info(f"PDF: {pdf_path}")
+    logger.info(f"Product: {product_name}")
 
     if not pdf_path.exists():
         logger.error("PDF file not found.")
         print("❌ PDF file does not exist.")
-        return
+        raise FileNotFoundError(f"PDF file not found: {pdf_path}")
 
     vector_store = VectorStore(
-        collection_name=settings.chroma_collection_name,
+        collection_name=settings.chroma_collection_name_questions,
         persist_directory=settings.chroma_persist_directory,
         embedding_model=settings.embedding_model
     )
 
-    if RESET_VECTOR_STORE:
-        logger.warning("Resetting vector store...")
+    rag_vector_store = VectorStore(
+        collection_name=settings.chroma_collection_name_rag,
+        persist_directory=settings.chroma_persist_directory,
+        embedding_model=settings.embedding_model
+    )
+
+    if reset_vector_store:
+        logger.warning("Resetting vector stores...")
         vector_store.reset()
+        rag_vector_store.reset()
 
     try:
         # Step 1: Extract text
@@ -325,15 +383,20 @@ def main():
 
         # Step 2: Generate structured FAQ
         structured_faq = generate_structured_faq(text)
+        structured_faq = enrich_structured_faq(structured_faq, product_name)
+
+        if len(structured_faq.get("topics", [])) < 10:
+            logger.warning("LLM returned fewer than 10 topics; consider regenerating.")
 
         # Step 3: Store JSON
-        store_in_mongodb(PRODUCT_NAME, structured_faq)
+        store_in_mongodb(product_name, structured_faq)
 
         # Step 4: Embed into vector DB
         embed_and_store(
             structured_faq,
-            PRODUCT_NAME,
-            vector_store
+            product_name,
+            vector_store,
+            rag_vector_store
         )
 
         logger.info("Structured ingestion completed successfully.")
@@ -346,5 +409,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
-
+    run_ingestion(
+        pdf_path=Path(settings.pdf_dir),
+        product_name=settings.default_product_name,
+        reset_vector_store=settings.reset_vector_store
+    )

@@ -335,8 +335,9 @@ nav {
 .bubble-source { font-size:0.62rem; color:var(--muted); font-weight:500; text-transform:uppercase; letter-spacing:0.07em; }
 
 /* FAQ answer blocks */
-.ab { padding:5px 0; border-top:1px solid var(--border); font-size:0.84rem; }
+.ab { padding:6px 0; border-top:1px solid var(--border); font-size:0.84rem; margin-top:8px; }
 .ab:first-child { border-top:none; }
+.ab:first-child { margin-top:0; }
 
 /* Quick reply chips */
 .quick-chips { display:flex; flex-direction:column; gap:7px; margin-top:4px; }
@@ -509,38 +510,12 @@ nav {
     </div> -->
 
     <!-- Two quick-action cards -->
-    <div class="cards-row fade-up d2">
+    <div class="cards-row fade-up d2" id="predefined-cards">
 
       <!-- Policy quick actions -->
-      <div class="card">
-        <div class="card-title">Policy quick actions</div>
-        <div class="action-list">
-          <div class="action-item" onclick="openChat('Raise a claim')">
-            <div class="action-icon">📋</div>
-            <span class="action-label">Raise a claim</span>
-            <span class="action-arr">→</span>
-          </div>
-          <div class="action-item" onclick="openChat('Get update on existing claims')">
-            <div class="action-icon">🔄</div>
-            <span class="action-label">Get update on existing claims</span>
-            <span class="action-arr">→</span>
-          </div>
-          <div class="action-item" onclick="openChat('Make changes to policy')">
-            <div class="action-icon">✏️</div>
-            <span class="action-label">Make changes to policy</span>
-            <span class="action-arr">→</span>
-          </div>
-          <div class="action-item" onclick="openChat('Renew policy')">
-            <div class="action-icon">🛡️</div>
-            <span class="action-label">Renew policy</span>
-            <span class="action-arr">→</span>
-          </div>
-          <div class="action-item" onclick="openChat('Download policy or e-cards')">
-            <div class="action-icon">⬇️</div>
-            <span class="action-label">Download policy or e-cards</span>
-            <span class="action-arr">→</span>
-          </div>
-        </div>
+      <div class="card" id="topic-card-1">
+        <div class="card-title" id="topic-title-1">Loading topics…</div>
+        <div class="action-list" id="topic-list-1"></div>
         <!-- mini ask input -->
         <div class="mini-input-wrap" id="mini-wrap-1">
           <input type="text" placeholder="Ask something else…" id="mini-1" onkeydown="miniSend(event,'mini-1')"/>
@@ -551,35 +526,9 @@ nav {
       </div>
 
       <!-- Explore insurance -->
-      <div class="card">
-        <div class="card-title">Explore insurance</div>
-        <div class="action-list">
-          <div class="action-item" onclick="openChat('Check disease coverages')">
-            <div class="action-icon">🔍</div>
-            <span class="action-label">Check disease coverages</span>
-            <span class="action-arr">→</span>
-          </div>
-          <div class="action-item" onclick="openChat('Compare plans and prices')">
-            <div class="action-icon">📊</div>
-            <span class="action-label">Compare plans and prices</span>
-            <span class="action-arr">→</span>
-          </div>
-          <div class="action-item" onclick="openChat('How do I switch to Zucora?')">
-            <div class="action-icon">↔️</div>
-            <span class="action-label">Switch to Zucora</span>
-            <span class="action-arr">→</span>
-          </div>
-          <div class="action-item" onclick="openChat('How do cashless claims work?')">
-            <div class="action-icon">💳</div>
-            <span class="action-label">Learn how cashless claims work</span>
-            <span class="action-arr">→</span>
-          </div>
-          <div class="action-item" onclick="openChat('Check network hospitals')">
-            <div class="action-icon">🏥</div>
-            <span class="action-label">Check network hospitals</span>
-            <span class="action-arr">→</span>
-          </div>
-        </div>
+      <div class="card" id="topic-card-2">
+        <div class="card-title" id="topic-title-2">Loading topics…</div>
+        <div class="action-list" id="topic-list-2"></div>
         <div class="mini-input-wrap" id="mini-wrap-2">
           <input type="text" placeholder="Ask something else…" id="mini-2" onkeydown="miniSend(event,'mini-2')"/>
           <button class="mini-send" onclick="miniSendBtn('mini-2')">
@@ -652,6 +601,7 @@ nav {
 const API     = 'http://localhost:8000';
 const PRODUCT = 'zucora';
 let   SESSION = crypto.randomUUID();
+const MAX_PREDEFINED_PER_TOPIC = 5;
 
 /* ════════════════════════════════════════
    DRAWER OPEN / CLOSE
@@ -691,6 +641,57 @@ function miniSendBtn(id) {
   if (!v) return;
   document.getElementById(id).value = '';
   openChat(v);
+}
+
+/* ════════════════════════════════════════
+   PREDEFINED QUESTIONS (Top 2 Topics)
+════════════════════════════════════════ */
+async function loadPredefinedQuestions() {
+  try {
+    const r = await fetch(`${API}/predefined-questions?product=${encodeURIComponent(PRODUCT)}`);
+    console.log(r)
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    const topics = data.topics || [];
+    renderPredefinedTopics(topics.slice(0, 2));
+  } catch (e) {
+    renderPredefinedFallback();
+  }
+}
+
+function renderPredefinedTopics(topics) {
+  for (let i = 0; i < 2; i++) {
+    const topic = topics[i];
+    const titleEl = document.getElementById(`topic-title-${i + 1}`);
+    const listEl = document.getElementById(`topic-list-${i + 1}`);
+    if (!titleEl || !listEl) continue;
+
+    if (!topic) {
+      titleEl.textContent = 'More topics coming soon';
+      listEl.innerHTML = '';
+      continue;
+    }
+
+    titleEl.textContent = topic.topic_name || topic.topic_id || 'Top questions';
+    const questions = (topic.questions || []).slice(0, MAX_PREDEFINED_PER_TOPIC);
+
+    listEl.innerHTML = questions.map(q => `
+      <div class="action-item" onclick="openChat('${escAttr(q)}')">
+        <div class="action-icon">❓</div>
+        <span class="action-label">${esc(q)}</span>
+        <span class="action-arr">→</span>
+      </div>
+    `).join('') || '<div class="action-item"><span class="action-label">No questions available</span></div>';
+  }
+}
+
+function renderPredefinedFallback() {
+  for (let i = 0; i < 2; i++) {
+    const titleEl = document.getElementById(`topic-title-${i + 1}`);
+    const listEl = document.getElementById(`topic-list-${i + 1}`);
+    if (titleEl) titleEl.textContent = 'Quick actions';
+    if (listEl) listEl.innerHTML = '<div class="action-item"><span class="action-label">Unable to load questions</span></div>';
+  }
 }
 
 /* ════════════════════════════════════════
@@ -793,12 +794,16 @@ function sendMsg() {
   addUserMsg(q);
   addTyping();
 
-  callChat(q).then(result => {
+  callChat(q).then(async result => {
     removeTyping();
     if (result.source === 'structured_faq' && result.answer_blocks?.length) {
       addFAQMsg(result.answer_blocks, result.topic);
+      const suggested = (result.related || []).slice(0, 3);
+      if (suggested.length) addSuggestedQuestions(suggested);
     } else {
       addBotMsg(result.answer || '⚠️ No answer returned.', result.source || 'rag');
+      const followups = await fetchFollowupSuggestions(q, 3);
+      if (followups.length) addSuggestedQuestions(followups);
     }
   }).catch(e => {
     removeTyping();
@@ -850,17 +855,53 @@ function addFAQMsg(blocks, topic) {
   w.className = 'bubble-wrap bot';
   let body = '';
   for (const b of blocks) {
-    if (b.type === 'text')
+    if (typeof b === 'string') {
+      body += `<div class="ab">${esc(b)}</div>`;
+    } else if (b?.type === 'text') {
       body += `<div class="ab">${esc(b.content||'')}</div>`;
-    else if (b.type === 'list')
+    } else if (b?.type === 'list') {
       body += `<div class="ab"><ul style="padding-left:16px;margin:3px 0">${(b.items||[]).map(i=>`<li>${esc(i)}</li>`).join('')}</ul></div>`;
-    else if (b.type === 'link')
+    } else if (b?.type === 'link') {
       body += `<div class="ab">🔗 <a href="${b.url||'#'}" target="_blank" style="color:var(--accent)">${esc(b.label||b.url||'')}</a></div>`;
+    }
   }
   w.innerHTML = `
     <div class="bubble-source" style="color:var(--green)">📋 Structured FAQ${topic?' · '+esc(topic):''}</div>
     <div class="bubble bot" style="padding:10px 14px">${body}</div>`;
   msgs().appendChild(w); scroll();
+}
+
+function addSuggestedQuestions(questions) {
+  const w = document.createElement('div');
+  w.className = 'bubble-wrap bot';
+  w.innerHTML = `
+    <div class="bubble-source" style="color:#666">Suggested questions</div>
+    <div class="quick-chips">
+      ${questions.map(q => `
+        <div class="chip" onclick="openChat('${escAttr(q)}')">
+          <span>${esc(q)}</span>
+          <span class="chip-arr">→</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+  msgs().appendChild(w); scroll();
+}
+
+async function fetchFollowupSuggestions(query, limit) {
+  try {
+    const r = await fetch(`${API}/suggest`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({partial_query: query, product: PRODUCT})
+    });
+    const data = await r.json();
+    const suggestions = (data.suggestions || []).map(s => s.question).filter(Boolean);
+    const unique = [...new Set(suggestions)];
+    return unique.slice(0, limit);
+  } catch (e) {
+    return [];
+  }
 }
 
 function addTyping() {
@@ -888,6 +929,17 @@ function esc(s) {
     .replace(/"/g,'&quot;')
     .replace(/\n/g,'<br>');
 }
+
+function escAttr(s) {
+  return String(s || '')
+    .replace(/&/g,'&amp;')
+    .replace(/'/g,'&#39;')
+    .replace(/"/g,'&quot;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;');
+}
+
+loadPredefinedQuestions();
 </script>
 </body>
 </html>

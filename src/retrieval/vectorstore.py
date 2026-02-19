@@ -212,22 +212,34 @@ class VectorStore:
         logger.info(f"Reset collection: {self.collection_name}")
         
     def add_structured_documents(self, documents: list):
+        if not documents:
+            logger.warning("No structured documents to add")
+            return
+
         texts = [doc["text"] for doc in documents]
         metadatas = [doc["metadata"] for doc in documents]
         ids = [doc["id"] for doc in documents]
 
+        logger.info("Generating embeddings for structured documents...")
+        embeddings = self.embedding_model.encode(
+            texts,
+            show_progress_bar=True,
+            convert_to_numpy=True
+        ).tolist()
+
         self.collection.add(
             documents=texts,
             metadatas=metadatas,
-            ids=ids
+            ids=ids,
+            embeddings=embeddings
         )
         
     def similarity_search(
-    self,
-    query: str,
-    k: int ,
-    filter_metadata: Optional[Dict[str, Any]] = None
-) -> List[Dict[str, Any]]:
+        self,
+        query: str,
+        k: int,
+        filter_metadata: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
         """
         Perform semantic similarity search using cosine distance.
 
@@ -258,15 +270,12 @@ class VectorStore:
             convert_to_numpy=True
         ).tolist()
         
-        print(self.collection)
-
         try:
             results = self.collection.query(
                 query_embeddings=[query_embedding],
                 n_results=k,
                 where=filter_metadata
             )
-            print(results)
         except Exception as e:
             logger.error(f"Chroma query failed: {e}")
             return []
@@ -299,4 +308,3 @@ class VectorStore:
         
 
         return formatted_results
-

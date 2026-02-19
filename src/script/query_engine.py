@@ -58,7 +58,7 @@ class StructuredFAQEngine:
 
     def __init__(self):
         self.vector_store = VectorStore(
-            collection_name=settings.chroma_collection_name,
+            collection_name=settings.chroma_collection_name_questions,
             persist_directory=settings.chroma_persist_directory,
             embedding_model=settings.embedding_model
         )
@@ -79,18 +79,18 @@ class StructuredFAQEngine:
 
         best = results[0]
         
-        if best["score"] is None or best["score"] < 0.40:
+        if best["score"] is None or best["score"] < 0.60:
             logger.info("No strong FAQ match found.")
             return None
 
         score = best["metadata"].get("score", 0.0) if hasattr(best, "metadata") else 0.0
 
         # You may adjust threshold
-        if score and score < 0.40:
+        if score and score < 0.60:
             return None
 
         topic_id = best["metadata"].get("topic_id")
-
+        faq_id = best["metadata"].get("faq_id")
         question = best["metadata"].get("question")
 
         topic_data = self.collection.find_one({ # mongodb collection
@@ -102,7 +102,7 @@ class StructuredFAQEngine:
             return None
 
         for faq in topic_data["faqs"]:
-            if faq["question"] == question:
+            if (faq_id and faq.get("faq_id") == faq_id) or (question and faq["question"] == question):
                 print({
                     "topic_id": topic_id,
                     "question": question,
@@ -129,7 +129,7 @@ class RAGEngine:
 
     def __init__(self):
         self.vector_store = VectorStore(
-            collection_name=settings.chroma_collection_name,
+            collection_name=settings.chroma_collection_name_rag,
             persist_directory=settings.chroma_persist_directory,
             embedding_model=settings.embedding_model
         )
@@ -168,7 +168,8 @@ Instructions:
 3. If you cannot find the answer in the context, say so clearly
 4. Be clear, concise, and accurate
 5. If the question is ambiguous, ask for clarification
-6. Answer in 3 small blocks of under 50 words.
+6. Answer in 3 small blocks of under 30 words without using the em dash.
+7. Answers should be user centric yet professional.
 """
 
         response = self.llm.invoke(prompt)
