@@ -22,8 +22,8 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 4000
     
     # Embeddings
-    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
-    embedding_dimension: int = 384
+    embedding_model: str = "text-embedding-3-small"
+    embedding_dimension: int = 1536
     
     # Retrieval Settings
     top_k_retrieval: int = 10
@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     chroma_collection_name_questions: str = "zucora_insurance_questions"
     chroma_collection_name_rag: str = "zucora_insurance_faqs_rag"
     reset_vector_store : bool = True
+    chroma_api_key: Optional[str] = None
+    chroma_tenant: Optional[str] = None
+    chroma_database: Optional[str] = None
     
     # MongoDb 
     mongodb_uri : str ="mongodb+srv://hishitagupta_db_user:UGtdfvm7BJV5xAjh@cluster0.t7gcm7s.mongodb.net/?appName=Cluster0"
@@ -58,7 +61,8 @@ class Settings(BaseSettings):
     
     
     class Config:
-        env_file = ".env"
+        # Resolve .env relative to project root (one level above this file)
+        env_file = str(Path(__file__).resolve().parent.parent / ".env")
         case_sensitive = False
     
     def __init__(self, **kwargs):
@@ -71,6 +75,3 @@ class Settings(BaseSettings):
 
 # Global settings instance
 settings = Settings()
-
-
-

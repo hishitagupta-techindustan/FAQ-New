@@ -173,7 +173,7 @@ def clear_session(session_id: str):
 @app.get("/predefined-questions", tags=["Config"])
 def get_predefined_questions(product: str = "zucora"):
     """
-    Returns the first 2 topics from MongoDB structured_faqs collection,
+    Returns the first 2 topics from the vector store,
     each with their list of FAQ questions.
 
     Frontend renders these as clickable items — clicking sends the question
@@ -181,58 +181,39 @@ def get_predefined_questions(product: str = "zucora"):
     InsuranceQueryEngine (FAQ match → RAG fallback).
 
     Query param:
-        product (str): filters by product field in MongoDB. Default: "general"
+        product (str): filters by product field in vector metadata. Default: "general"
     """
     try:
-        # Reuse the already-open mongo connection inside faq_engine
-        collection = engine.faq_engine.collection
+        docs = engine.faq_engine.vector_store.get_documents(
+            filter_metadata={"product": product, "question_type": "original"},
+            limit=200
+        )
 
-        # # Fetch first 2 topic documents for the given product
-        # topics_cursor = collection.find(
-        #     {"product": product},
-        #     {"_id": 0, "topic_id": 1, "topic_name": 1, "faqs": 1}
-        # ).limit(2)
-        
-        topics_cursor = collection.aggregate([
-        {"$match": {"product": product}},
-        {
-            "$project": {
-                "_id": 0,
-                "topic_id": 1,
-                "topic_name": "$title",   # rename title → topic_name
-                "faqs": 1
-            }
-        },
-        {"$limit": 2}
-    ])
-        
-        
-
-        topics = list(topics_cursor)
-        
-        # print(topics)
-
-        if not topics:
+        if not docs:
             raise HTTPException(
                 status_code=404,
                 detail=f"No structured FAQs found for product='{product}'"
             )
-            
-       
 
-        result = []
-        for topic in topics:
-            # Extract just the question text from each FAQ entry
-            questions = [faq["question"] for faq in topic.get("faqs", [])]
+        topics = {}
+        order = []
+        for doc in docs:
+            meta = doc.get("metadata", {}) or {}
+            topic_id = meta.get("topic_id", "")
+            topic_name = meta.get("topic_name", "") or topic_id
+            question = meta.get("question", "")
+            if not topic_id or not question:
+                continue
+            if topic_id not in topics:
+                topics[topic_id] = {
+                    "topic_id": topic_id,
+                    "topic_name": topic_name,
+                    "questions": []
+                }
+                order.append(topic_id)
+            topics[topic_id]["questions"].append(question)
 
-            topic_id = topic.get("topic_id")
-            topic_name = topic.get("topic_name") or topic_id
-
-            result.append({
-                "topic_id":   topic_id,
-                "topic_name": topic_name,  # fallback to title/topic_id if no display name
-                "questions":  questions
-            })
+        result = [topics[tid] for tid in order[:2]]
 
         return {"product": product, "topics": result}
 

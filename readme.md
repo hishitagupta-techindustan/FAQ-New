@@ -64,3 +64,82 @@ flowchart LR
 Notes:
 - Structured FAQ path is preferred; RAG is used only if no strong FAQ match is found.
 - Suggestions use both question and RAG vector stores, then merge keyword + semantic hits.
+
+## Chroma Cloud Setup
+
+To use Chroma Cloud (recommended for deployment), set these environment variables:
+
+```
+CHROMA_API_KEY=your_key
+CHROMA_TENANT=your_tenant
+CHROMA_DATABASE=your_database
+```
+
+If these are not set, the app falls back to local Chroma storage at the configured `chroma_persist_directory`.
+
+After switching to Cloud, re-run ingestion so vectors are written to the cloud database.
+
+
+
+# Suggestions Pipeline
+
+
+                 ┌─────────────────────────┐
+                 │  User types query       │
+                 │  "appliance repair..."  │
+                 └─────────────┬───────────┘
+                               │
+                               ▼
+                 ┌─────────────────────────┐
+                 │ 1️⃣ Semantic Retrieval   │
+                 │ Chroma similarity_search │
+                 │ (question + rag store)   │
+                 └─────────────┬───────────┘
+                               │
+                               ▼
+                 ┌─────────────────────────┐
+                 │ Candidate Pool          │
+                 │ {question, topic, score}│
+                 └─────────────┬───────────┘
+                               │
+         ┌─────────────────────┴─────────────────────┐
+         ▼                                           ▼
+┌─────────────────────┐                    ┌─────────────────────┐
+│ 2️⃣ Keyword Scoring  │                    │ 3️⃣ Semantic Filter │
+│ over candidates      │                    │ keep score ≥ 0.65   │
+│ substring / coverage │                    │                     │
+└───────────┬─────────┘                    └───────────┬─────────┘
+            ▼                                            ▼
+     Keyword Hits                                  Semantic Hits
+            │                                            │
+            └──────────────┬─────────────────────────────┘
+                           ▼
+                 ┌─────────────────────────┐
+                 │ 4️⃣ Merge + Deduplicate │
+                 │ if same question:       │
+                 │  score = 0.8S + 0.2K    │
+                 │  match_type = "both"    │
+                 └─────────────┬───────────┘
+                               │
+                               ▼
+                 ┌─────────────────────────┐
+                 │ 5️⃣ Sort by score DESC  │
+                 └─────────────┬───────────┘
+                               │
+                               ▼
+                 ┌─────────────────────────┐
+                 │ 6️⃣ Threshold Filter     │
+                 │ keep score ≥ 0.60       │
+                 └─────────────┬───────────┘
+                               │
+                               ▼
+                 ┌─────────────────────────┐
+                 │ 7️⃣ Fill gaps            │
+                 │ add keyword hits        │
+                 │ add LLM fallback        │
+                 └─────────────┬───────────┘
+                               │
+                               ▼
+                 ┌─────────────────────────┐
+                 │ Return ≤ 5 suggestions  │
+                 └─────────────────────────┘

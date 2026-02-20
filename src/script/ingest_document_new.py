@@ -2,19 +2,18 @@
 
 """
 Structured FAQ Ingestion Script
-PDF → Full Text → LLM → Structured JSON → MongoDB → Vector DB
+PDF → Full Text → LLM → Structured JSON → Vector DB
 """
 
 """
 Structured FAQ Ingestion Script
 PDF → Full Text → LLM (Pydantic Structured Output) →
-MongoDB → Vector Store (Chroma)
+Vector Store (Chroma)
 """
 
 import sys
 from pathlib import Path
 from loguru import logger
-from pymongo import MongoClient
 import fitz
 from typing import List, Optional
 from pydantic import BaseModel, Field
@@ -39,7 +38,6 @@ class FAQItem(BaseModel):
     related: List[str] = Field(..., min_items=1, max_items=3)
     link_id: Optional[str] = None
     link_url: Optional[str] = None
-    next_prompt: Optional[str] = None
 
 
 class Topic(BaseModel):
@@ -101,7 +99,7 @@ Create a professional, customer-centric FAQ knowledge structure suitable for a m
 STRUCTURE REQUIREMENTS
 -----------------------------------------
 
-1. Extract AT LEAST 10 main topics from the document (10–14 is ideal).
+1. Extract AT LEAST 10 main topics from the document (10–20 is ideal).
    - Topics must be distinct, non-overlapping, and cover the full document breadth
    - Prefer structured, insurance-domain categories over generic phrasing
 
@@ -129,7 +127,7 @@ STRUCTURE REQUIREMENTS
 
    - answer_blocks:
        * 3 blocks exactly
-       * Each block max between 10-20 words.
+       * Each block max between 20-25 words.
        * Clear, simple language
        * Slightly descriptive but not verbose
        * Avoid legal jargon
@@ -139,11 +137,6 @@ STRUCTURE REQUIREMENTS
    - related:
        * 2 related questions from the same topic
        * Must be actual questions from that topic
-
-   - next_prompt:
-       * A short clarification prompt ONLY if a follow-up may help
-       * Example: "Are you asking about a new policy or renewal?"
-       * Otherwise return null
 
 -----------------------------------------
 CONTENT RULES
@@ -156,6 +149,7 @@ CONTENT RULES
 - Maintain factual accuracy strictly.
 - Avoid internal or company-centric phrasing.
 - Do not include disclaimers unless present in the document.
+- Use exact words from the document provided as much as possible.
 
 -----------------------------------------
 STYLE GUIDELINES
@@ -210,8 +204,7 @@ Return STRICTLY valid JSON matching this structure:
           "related": [
             "string",
             "string"
-          ],
-          "next_prompt": "string or null"
+          ]
         }
       ]
     }
@@ -273,33 +266,7 @@ def load_links_from_xlsx(xlsx_path: Path) -> List[Dict[str, str]]:
     return links
 
 
-def store_links_in_mongodb(product_name: str, links: List[Dict[str, str]]) -> None:
-    if not links:
-        return
-    client = MongoClient(settings.mongodb_uri)
-    db = client[settings.mongodb_db]
-    collection = db["link_metadata"]
-
-    for item in links:
-        collection.update_one(
-            {"product": product_name, "link_id": item["link_id"]},
-            {"$set": {"product": product_name, "link_id": item["link_id"], "link_url": item["link_url"]}},
-            upsert=True
-        )
-
-
-def add_links_to_faqs(structured_data: dict, product_name: str) -> dict:
-    client = MongoClient(settings.mongodb_uri)
-    db = client[settings.mongodb_db]
-    collection = db["link_metadata"]
-
-    link_map: Dict[str, str] = {}
-    for doc in collection.find({"product": product_name}, {"_id": 0, "link_id": 1, "link_url": 1}):
-        link_id = doc.get("link_id")
-        link_url = doc.get("link_url")
-        if link_id and link_url:
-            link_map[link_id] = link_url
-
+def add_links_to_faqs(structured_data: dict, link_map: Dict[str, str]) -> dict:
     for topic in structured_data.get("topics", []):
         for faq in topic.get("faqs", []):
             link_id = faq.get("link_id")
@@ -333,31 +300,6 @@ def enrich_structured_faq(structured_data: dict, product_name: str) -> dict:
 
 
 # =====================================================
-# ---------------- MongoDB Storage --------------------
-# =====================================================
-
-def store_in_mongodb(product_name: str, structured_data: dict):
-    logger.info("Connecting to MongoDB...")
-
-    client = MongoClient(settings.mongodb_uri)
-    db = client[settings.mongodb_db]
-    collection = db["structured_faqs"]
-
-    for topic in structured_data["topics"]:
-        topic["product"] = product_name
-
-        collection.update_one(
-            {
-                "product": product_name,
-                "topic_id": topic["topic_id"]
-            },
-            {"$set": topic},
-            upsert=True
-        )
-
-    logger.info("Structured FAQ stored successfully in MongoDB.")
-
-
 # =====================================================
 # ---------------- Vector Store Embed -----------------
 # =====================================================
@@ -389,9 +331,13 @@ def embed_and_store(structured_data: dict,
                     "metadata": {
                         "product": product_name,
                         "topic_id": topic_id,
+                        "topic_name": topic.get("title", ""),
                         "faq_id": faq_id,
                         "question": question_text.strip(),
                         "link_id": link_id,
+                        "link_url": faq.get("link_url"),
+                        "answer_blocks": faq.get("answer_blocks", []),
+                        "related": faq.get("related", []),
                         "question_type": "original" if q_idx == 0 else "variation",
                         "question_index": q_idx
                     }
@@ -413,6 +359,7 @@ def embed_and_store(structured_data: dict,
                     "topic_id": topic_id,
                     "faq_id": faq_id,
                     "link_id": link_id,
+                    "link_url": faq.get("link_url"),
                     "question": faq["question"]
                 }
             })
@@ -472,7 +419,6 @@ def run_ingestion(pdf_path: Path,
         link_items: List[Dict[str, str]] = []
         if xlsx_candidates:
             link_items = load_links_from_xlsx(xlsx_candidates[0])
-            store_links_in_mongodb(product_name, link_items)
 
         # Step 2: Generate structured FAQ
         if link_items:
@@ -488,15 +434,13 @@ Do not invent ids or urls. Only output link_id; link_url must be null.
         else:
             structured_faq = generate_structured_faq(text)
         structured_faq = enrich_structured_faq(structured_faq, product_name)
-        structured_faq = add_links_to_faqs(structured_faq, product_name)
+        link_map = {li["link_id"]: li["link_url"] for li in link_items if li.get("link_id") and li.get("link_url")}
+        structured_faq = add_links_to_faqs(structured_faq, link_map)
 
         if len(structured_faq.get("topics", [])) < 10:
             logger.warning("LLM returned fewer than 10 topics; consider regenerating.")
 
-        # Step 3: Store JSON
-        store_in_mongodb(product_name, structured_faq)
-
-        # Step 4: Embed into vector DB
+        # Step 3: Embed into vector DB
         embed_and_store(
             structured_faq,
             product_name,

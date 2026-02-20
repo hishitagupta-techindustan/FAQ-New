@@ -1,7 +1,6 @@
 import uuid
 from typing import Dict, Any, Optional
 from loguru import logger
-from pymongo import MongoClient
 from langchain_openai import ChatOpenAI
 import sys
 from pathlib import Path
@@ -63,65 +62,58 @@ class StructuredFAQEngine:
             embedding_model=settings.embedding_model
         )
 
-        self.mongo = MongoClient(settings.mongodb_uri)
-        self.db = self.mongo[settings.mongodb_db]
-        self.collection = self.db["structured_faqs"]
-        self.link_collection = self.db["link_metadata"]
-
     def search(self, query: str, product: str, k: int = 1):
         """
         Uses vector search over structured FAQ embeddings.
         """
 
-        results = self.vector_store.similarity_search(query, k=k)
+        results = self.vector_store.similarity_search(
+            query,
+            k=k,
+            filter_metadata={"product": product}
+        )
 
         if not results:
             return None
 
         best = results[0]
         
-        if best["score"] is None or best["score"] < 0.60:
+        if best.get("score") is None or best.get("score") < 0.60:
             logger.info("No strong FAQ match found.")
             return None
 
-        score = best["metadata"].get("score", 0.0) if hasattr(best, "metadata") else 0.0
+        meta = best.get("metadata", {}) or {}
+        topic_id = meta.get("topic_id")
+        question = meta.get("question")
+        answer_blocks = self._normalize_list(meta.get("answer_blocks"))
+        related = self._normalize_list(meta.get("related"))
 
-        # You may adjust threshold
-        if score and score < 0.60:
+        if not answer_blocks:
             return None
 
-        topic_id = best["metadata"].get("topic_id")
-        faq_id = best["metadata"].get("faq_id")
-        question = best["metadata"].get("question")
+        return {
+            "topic_id": topic_id,
+            "question": question,
+            "answer_blocks": answer_blocks,
+            "related": related,
+            "link_id": meta.get("link_id"),
+            "link_url": meta.get("link_url")
+        }
 
-        topic_data = self.collection.find_one({ # mongodb collection
-            "product": product,
-            "topic_id": topic_id
-        })
-
-        if not topic_data:
-            return None
-
-        for faq in topic_data["faqs"]:
-            if (faq_id and faq.get("faq_id") == faq_id) or (question and faq["question"] == question):
-                print({
-                    "topic_id": topic_id,
-                    "question": question,
-                    "answer_blocks": faq["answer_blocks"],
-                    "related":faq["related"]
-                })
-                return {
-                    "topic_id": topic_id,
-                    "question": question,
-                    "answer_blocks": faq["answer_blocks"],
-                    "related":faq["related"],
-                    "link_id": faq.get("link_id"),
-                    "link_url": faq.get("link_url")
-                }
-                
-                
-
-        return None
+    def _normalize_list(self, value):
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str):
+            import ast
+            try:
+                parsed = ast.literal_eval(value)
+                if isinstance(parsed, list):
+                    return parsed
+            except Exception:
+                pass
+        return []
 
 
 # =====================================================
@@ -136,9 +128,6 @@ class RAGEngine:
             persist_directory=settings.chroma_persist_directory,
             embedding_model=settings.embedding_model
         )
-        self.mongo = MongoClient(settings.mongodb_uri)
-        self.db = self.mongo[settings.mongodb_db]
-        self.link_collection = self.db["link_metadata"]
 
         self.llm = ChatOpenAI(
             model=settings.openai_model_large,
@@ -175,7 +164,7 @@ Instructions:
 3. If you cannot find the answer in the context, say so clearly
 4. Be clear, concise, and accurate
 5. If the question is ambiguous, ask for clarification
-6. Answer in exactly 3 small blocks of under 30 words without using the em dash.
+6. Answer in exactly 3 small blocks of under 20-25 words without using the em dash.
 7. Answers should be user centric yet professional.
 """
 
@@ -190,13 +179,8 @@ Instructions:
                 cand_id = meta.get("link_id")
                 if cand_id and score is not None and score >= self.link_min_score:
                     link_id = cand_id
-                    link_doc = self.link_collection.find_one(
-                        {"product": settings.default_product_name, "link_id": link_id},
-                        {"_id": 0, "link_url": 1}
-                    )
-                    link_url = link_doc.get("link_url") if link_doc else None
-                    if link_url:
-                        break
+                    link_url = meta.get("link_url")
+                    break
 
         return {"answer": response.content, "link_id": link_id, "link_url": link_url}
 

@@ -698,21 +698,38 @@ function renderPredefinedFallback() {
    SUGGESTIONS
 ════════════════════════════════════════ */
 let suggTimer = null, curQ = '', suggHits = [];
+let lastRequestId = 0;
+let lastRequestQuery = '';
+
+function normWords(s) {
+  const norm = String(s || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!norm) return [];
+  return norm.split(' ');
+}
 
 function onType() {
   const v = document.getElementById('chat-input').value;
   curQ = v.trim();
   document.getElementById('send-btn').disabled = !curQ;
 
-  if (curQ.length < 2) { closeSugg(); return; }
+  if (curQ.length < 2) {
+    closeSugg();
+    return;
+  }
 
-  showSuggLoad();
+  // Keep showing previous suggestions while we fetch new ones
+  showSuggLoad(true);
   clearTimeout(suggTimer);
   suggTimer = setTimeout(() => fetchSugg(curQ), 310);
 }
 
 async function fetchSugg(q) {
-  if (q !== curQ) return;
+  const reqId = ++lastRequestId;
+  lastRequestQuery = q;
   try {
     const r = await fetch(`${API}/suggest`, {
       method: 'POST',
@@ -720,7 +737,7 @@ async function fetchSugg(q) {
       body: JSON.stringify({partial_query: q, product: PRODUCT})
     });
     const data = await r.json();
-    if (q !== curQ) return;
+    if (reqId !== lastRequestId || q !== lastRequestQuery) return;
     suggHits = data.suggestions || [];
     renderSugg(suggHits, q);
   } catch(e) { closeSugg(); }
@@ -728,6 +745,8 @@ async function fetchSugg(q) {
 
 function renderSugg(list, q) {
   const dd = document.getElementById('suggestions-dd');
+  const loader = dd.querySelector('.sugg-loading.inline');
+  if (loader) loader.remove();
   if (!list.length) {
     dd.innerHTML = '<div class="sugg-loading" style="color:#aaa">No suggestions found</div>';
     openSugg(); return;
@@ -746,9 +765,19 @@ function renderSugg(list, q) {
   openSugg();
 }
 
-function showSuggLoad() {
-  document.getElementById('suggestions-dd').innerHTML =
-    '<div class="sugg-loading"><div class="sugg-spin"></div>Finding suggestions…</div>';
+function showSuggLoad(keepExisting) {
+  const dd = document.getElementById('suggestions-dd');
+  if (keepExisting && suggHits.length) {
+    if (!dd.querySelector('.sugg-loading.inline')) {
+      const div = document.createElement('div');
+      div.className = 'sugg-loading inline';
+      div.innerHTML = '<div class="sugg-spin"></div>Updating suggestions…';
+      dd.prepend(div);
+    }
+    openSugg();
+    return;
+  }
+  dd.innerHTML = '<div class="sugg-loading"><div class="sugg-spin"></div>Finding suggestions…</div>';
   openSugg();
 }
 
