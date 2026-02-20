@@ -23,8 +23,8 @@ flowchart LR
     U[Frontend / Client] -->|POST /chat| J[InsuranceQueryEngine]
     U -->|GET /predefined-questions| K[MongoDB: structured_faqs]
     U -->|POST /suggest| L[SuggestionEngine]
-    U -->|GET /session/{id}/history| M[SessionMemory]
-    U -->|DELETE /session/{id}| M
+    U -->|GET /session/:id/history| M[SessionMemory]
+    U -->|DELETE /session/:id| M
 
     J --> N[StructuredFAQEngine\nVector search (questions)]
     N -->|Match >= threshold| O[MongoDB: structured_faqs]
