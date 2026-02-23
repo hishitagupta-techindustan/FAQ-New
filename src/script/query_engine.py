@@ -78,7 +78,7 @@ class StructuredFAQEngine:
 
         best = results[0]
         
-        if best.get("score") is None or best.get("score") < 0.60:
+        if best.get("score") is None or best.get("score") < 0.90:
             logger.info("No strong FAQ match found.")
             return None
 

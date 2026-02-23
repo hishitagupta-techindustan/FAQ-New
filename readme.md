@@ -81,7 +81,7 @@ After switching to Cloud, re-run ingestion so vectors are written to the cloud d
 
 
 
-# Suggestions Pipeline
+# Suggestions Pipeline - before optimisation
 
 
                  ┌─────────────────────────┐
@@ -143,3 +143,42 @@ After switching to Cloud, re-run ingestion so vectors are written to the cloud d
                  ┌─────────────────────────┐
                  │ Return ≤ 5 suggestions  │
                  └─────────────────────────┘
+
+
+# Suggestions Pipeline : after optimisation
+
+User
+ │
+ ▼
+Normalize
+ │
+ ▼
+Cache?
+ ├── YES → Return
+ └── NO
+        │
+        ▼
+Inflight?
+ ├── YES → Wait Future → Return
+ └── NO
+        │
+        ▼
+ThreadPool.submit(_compute)
+        │
+        ▼
+Embed Query
+        │
+        ▼
+Vector Search ─────┐
+                    ├── Merge → Score → Top K
+Keyword Search ─────┘
+        │
+        ▼
+Optional LLM Rerank
+        │
+        ▼
+Store in Cache
+Remove from Inflight
+        │
+        ▼
+Return Suggestions
