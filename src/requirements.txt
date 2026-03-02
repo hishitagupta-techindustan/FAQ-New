@@ -138,7 +138,7 @@ pexpect==4.9.0
 pickleshare==0.7.5
 pillow==12.1.1
 pip-check-reqs==2.5.6
-pipreqs==0.5.0
+pipreqs==0.4.13
 platformdirs==4.9.2
 portalocker==3.2.0
 posthog==5.4.0
