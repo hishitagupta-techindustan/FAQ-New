@@ -78,24 +78,22 @@ class StructuredFAQEngine:
 
         best = results[0]
         
-        if best.get("score") is None or best.get("score") < 0.90:
+        if best.get("score") is None or best.get("score") < 0.95:
             logger.info("No strong FAQ match found.")
             return None
 
         meta = best.get("metadata", {}) or {}
         topic_id = meta.get("topic_id")
         question = meta.get("question")
-        answer_blocks = self._normalize_list(meta.get("answer_blocks"))
-        related = self._normalize_list(meta.get("related"))
 
-        if not answer_blocks:
-            return None
+        
+
+      
 
         return {
             "topic_id": topic_id,
             "question": question,
-            "answer_blocks": answer_blocks,
-            "related": related,
+           
             "link_id": meta.get("link_id"),
             "link_url": meta.get("link_url")
         }
@@ -138,7 +136,7 @@ class RAGEngine:
 
     def generate(self, query: str, memory_context: str):
 
-        docs = self.vector_store.similarity_search(query, k=4)
+        docs = self.vector_store.similarity_search(query, k=10)
         print(docs)
 
         context_text = "\n\n".join([doc["text"] for doc in docs])
@@ -161,10 +159,10 @@ User question:
 Instructions:
 1. If the question is not related to insurance, answer the question in short along with prompting the user to explore Zucora in a witty manner.
 2. Answer based ONLY on the provided context
-3. If you cannot find the answer in the context, say so clearly
+3. Do NOT say "the context doesn't specify" if any relevant information exists — use what's there.
 4. Be clear, concise, and accurate
 5. If the question is ambiguous, ask for clarification
-6. Answer in exactly 3 small blocks of under 20-25 words without using the em dash.
+6. Answer in exactly 3 small blocks of under 30-40 words without using the em dash.
 7. Answers should be user centric yet professional.
 """
 
@@ -197,71 +195,24 @@ class InsuranceQueryEngine:
         self.rag_engine = RAGEngine()
         
 
-    def handle_query(self,
-                     session_id: str,
-                     product: str,
-                     user_query: str):
-
+    def handle_query(self, session_id: str, product: str, user_query: str):
         logger.info(f"Processing query: {user_query}")
 
         session = self.memory.get(session_id)
         product = settings.default_product_name
 
-        # ===============================
-        # 1️⃣ Try Structured FAQ First
-        # ===============================
-        faq_match = self.faq_engine.search(user_query, product)
-        
-        print(faq_match)
-
-        if faq_match:
-            logger.info("Structured FAQ match found.")
-
-            self.memory.update(
-                session_id,
-                topic=faq_match["topic_id"],
-                question=faq_match["question"],
-                user_query=user_query,
-                
-            )
-
-            response_data = {
-                "source": "structured_faq",
-                "topic": faq_match["topic_id"],
-                "answer_blocks": faq_match["answer_blocks"],
-                "related": faq_match["related"],
-            }
-
-            # Add only if present
-            if faq_match.get("link_id"):
-                response_data["link_id"] = faq_match["link_id"]
-
-            if faq_match.get("link_url"):
-                response_data["link_url"] = faq_match["link_url"]
-
-            return response_data
-
-        # ===============================
-        # 2️⃣ Fallback to RAG
-        # ===============================
-
-        logger.info("Falling back to RAG...")
-
         memory_context = f"""
-Current topic: {session.get("current_topic")}
-Last question: {session.get("last_question")}
-Recent history: {session.get("history")[-3:]}
-"""
+    Current topic: {session.get("current_topic")}
+    Last question: {session.get("last_question")}
+    Recent history: {session.get("history")[-3:]}
+    """
 
         rag_answer = self.rag_engine.generate(
             query=user_query,
             memory_context=memory_context
         )
 
-        self.memory.update(
-            session_id,
-            user_query=user_query
-        )
+        self.memory.update(session_id, user_query=user_query)
 
         return {
             "source": "rag",

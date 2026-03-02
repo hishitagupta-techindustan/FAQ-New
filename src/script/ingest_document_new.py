@@ -1,30 +1,29 @@
 
 
-"""
-Structured FAQ Ingestion Script
-PDF → Full Text → LLM → Structured JSON → Vector DB
-"""
 
 """
 Structured FAQ Ingestion Script
-PDF → Full Text → LLM (Pydantic Structured Output) →
-Vector Store (Chroma)
+PDF → Chunked Text → LLM (per chunk) → Merge JSON → Vector DB
 """
 
 import sys
+import json
 from pathlib import Path
 from loguru import logger
 import fitz
-from typing import List, Optional
+from typing import List, Optional, Dict
 from pydantic import BaseModel, Field
+
 from langchain_openai import ChatOpenAI
-from typing import Dict
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.messages import HumanMessage, SystemMessage
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import settings
 from script.vectorstore import VectorStore
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 # =====================================================
@@ -32,23 +31,19 @@ from script.vectorstore import VectorStore
 # =====================================================
 
 class FAQItem(BaseModel):
-    question: str = Field(..., min_length=5, max_length=120)
-    question_variations: List[str] = Field(..., min_items=4, max_items=5)
-    answer_blocks: List[str] = Field(..., min_items=2, max_items=3)
-    related: List[str] = Field(..., min_items=1, max_items=3)
-    link_id: Optional[str] = None
-    link_url: Optional[str] = None
+    question: str = Field(..., min_length=5, max_length=200)
+    question_variations: List[str] = Field(..., min_items=2, max_items=3)
+    
 
 
 class Topic(BaseModel):
     topic_id: str
     title: str
-    summary: str
-    faqs: List[FAQItem]
+    faqs: List[FAQItem] = Field(..., min_items=3, max_items=3)
 
 
 class StructuredFAQ(BaseModel):
-    topics: List[Topic]
+    topics: List[Topic] = Field(..., min_items=3, max_items=5)
 
 
 # =====================================================
@@ -56,185 +51,245 @@ class StructuredFAQ(BaseModel):
 # =====================================================
 
 def extract_full_text(pdf_path: Path) -> str:
-    """Extract full cleaned text from PDF."""
+    """Extract full cleaned text from PDF, preserving structure."""
     doc = fitz.open(pdf_path)
-    full_text = ""
+    pages_text = []
 
-    for page in doc:
-        full_text += page.get_text() + "\n"
+    for page_num, page in enumerate(doc):
+        page_text = page.get_text()
+        if page_text.strip():
+            pages_text.append(f"[PAGE {page_num + 1}]\n{page_text}")
 
     doc.close()
 
-    # Basic cleaning
-    full_text = " ".join(full_text.split())
-
+    full_text = "\n\n".join(pages_text)
     return full_text
+
+
+def extract_keywords_from_text(text: str) -> List[str]:
+    """Extract meaningful keywords from text for later validation."""
+    import re
+    # Normalize whitespace but keep structure
+    words = re.findall(r'\b[A-Za-z][a-zA-Z\-]{3,}\b', text)
+    # Deduplicate preserving order, lowercase
+    seen = set()
+    keywords = []
+    for w in words:
+        lw = w.lower()
+        if lw not in seen:
+            seen.add(lw)
+            keywords.append(w)
+    return keywords
+
+
+# =====================================================
+# --------- Text Chunking with LangChain -------------
+# =====================================================
+
+def chunk_text(text: str,
+               chunk_size: int = 1000,
+               chunk_overlap: int = 200) -> List[str]:
+    """
+    Split text into overlapping chunks using LangChain's splitter.
+    Overlap ensures context continuity and no topic is cut mid-way.
+    """
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        separators=["\n\n", "\n", ". ", " ", ""],
+        length_function=len,
+    )
+    chunks = splitter.split_text(text)
+    logger.info(f"Text split into {len(chunks)} chunks (size={chunk_size}, overlap={chunk_overlap})")
+    return chunks
 
 
 # =====================================================
 # --------- LLM Structured FAQ Generation ------------
 # =====================================================
 
-def generate_structured_faq(text: str, extra_prompt: Optional[str] = None) -> dict:
-    """Generate structured FAQ JSON using Pydantic schema."""
+SYSTEM_PROMPT = """You are a keyword extraction and FAQ generation engine for an insurance search system.
 
-    logger.info("Initializing LLM...")
+YOUR SINGLE MOST IMPORTANT JOB:
+Every distinct word, phrase, number, term, clause name, product name, condition, limit,
+percentage, duration, or proper noun present in the chunk MUST appear verbatim (exact spelling,
+exact casing) in at least one question or question_variation across the entire output.
 
-    llm = ChatOpenAI(
-        model=settings.openai_model_large,
-        temperature=settings.llm_temperature,
-        api_key=settings.openai_api_key
-    )
+This is not optional. The output feeds a suggestion engine: if a word exists in the PDF but
+not in any question/variation, users who type that word will get zero suggestions.
 
-    structured_llm = llm.with_structured_output(StructuredFAQ)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 1 — BEFORE WRITING ANY JSON:
+Mentally list EVERY meaningful term in the chunk:
+  - All product/plan names
+  - All numerical values (amounts, percentages, days, years)
+  - All clause/condition names
+  - All action words specific to this domain
+  - All proper nouns, brand names, legal terms
+Then ensure each one ends up verbatim in at least one question or variation.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    prompt = """You are building a professional, structured insurance FAQ system similar to ACKO.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2 — ANSWERABILITY SELF-CHECK (run before writing each FAQ):
+For every question and variation you are about to write, ask yourself:
+  "Can this question be answered FULLY and SPECIFICALLY using only the
+   text in this chunk — without relying on general insurance knowledge,
+   assumptions, or information from outside this chunk?"
 
-Your task is to convert the provided document into a clean, structured, UI-ready FAQ JSON.
+If the answer is NO → rewrite the question so it scopes to what the chunk
+actually says. If the chunk only partially addresses a topic, write the
+question narrowly around what IS stated, not what is implied.
 
-OBJECTIVE:
-Create a professional, customer-centric FAQ knowledge structure suitable for a modern insurance app.
+A question is chunk-answerable if and only if:
+  ✓ The answer's key fact (number, condition, eligibility rule, process
+    step, limit, exclusion) is explicitly present in this chunk's text.
+  ✗ The answer requires inferring from general domain knowledge.
+  ✗ The answer requires information from another section/chunk not shown.
+  ✗ The answer is "it depends" with no further detail in the chunk.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
------------------------------------------
-STRUCTURE REQUIREMENTS
------------------------------------------
+STRUCTURE:
 
-1. Extract AT LEAST 10 main topics from the document (10–20 is ideal).
-   - Topics must be distinct, non-overlapping, and cover the full document breadth
-   - Prefer structured, insurance-domain categories over generic phrasing
+1. Extract 8-10 distinct topics from this chunk only.
 
-2. Each topic MUST include:
+2. Each topic:
+   - topic_id: snake_case
+   - title: 2–4 words
+   - summary: one line
+   - faqs: EXACTLY 5 FAQ entries. Not 1, not 3 — always 5. This is enforced by schema.
 
-   - topic_id: snake_case, short and stable identifier
-   - title: 2–4 words, professional and category-level
-            (e.g., "Policy Coverage Details", "Claims & Settlement Process")
-   - summary: One concise line explaining what this section covers
-   - faqs: Exactly 5 FAQ entries per topic
+3. Each FAQ:
 
-3. Each FAQ MUST include:
+   question:
+   - Start with What / How / When / Can I / Does / Why
+   - MUST contain at least 2–3 exact terms from the document
+   - Up to 20 words — completeness beats brevity
+   - MUST be answerable solely from this chunk's text
 
-   - question:
-       * User-centric as well as professional phrasing
-       * Start with What / How / When / Can I / Does my / Why
-       * Natural customer language
-       * Short and mobile-friendly (max 12–14 words)
+   question_variations (4–5):
+   - Each variation MUST introduce at least one NEW keyword not in the main question
+   - Use variations to mop up remaining terms not yet covered
+   - Together with the main question they must cover ALL terms for that FAQ's topic area
+   - Every variation must also be answerable solely from this chunk's text
 
-   - question_variations:
-       * 4–5 professional rephrasings of the same question
-       * Keep meaning identical; vary phrasing and syntax
-       * Each should be short and customer-friendly
-       * Do not add new information
 
-   - answer_blocks:
-       * 3 blocks exactly
-       * Each block max between 20-25 words.
-       * Clear, simple language
-       * Slightly descriptive but not verbose
-       * Avoid legal jargon
-       * No marketing exaggeration
-       * Directly address the customer ("you", "your")
 
-   - related:
-       * 2 related questions from the same topic
-       * Must be actual questions from that topic
 
------------------------------------------
-CONTENT RULES
------------------------------------------
+HARD RULES:
+- Copy terms exactly — do not paraphrase "₹5,000 deductible" as "some deductible"
+- Do not invent anything not in the chunk
+- Numbers, rupee amounts, day counts must appear as written
+- Do NOT write questions whose answers depend on information outside this chunk
+- Do NOT write questions that can only be answered with "contact us" or "refer to policy"
+  unless those exact words appear in the chunk as the stated resolution
+- If the chunk does not contain enough detail to write 5 fully answerable FAQs for a topic,
+  reduce the scope of each question further (ask about a sub-detail) rather than fabricating
 
-- Use ONLY information explicitly available in the document.
-- Do NOT hallucinate features, benefits, limits, numbers, or coverage.
-- Do NOT invent regulatory details.
-- If something is unclear, simplify — do not assume.
-- Maintain factual accuracy strictly.
-- Avoid internal or company-centric phrasing.
-- Do not include disclaimers unless present in the document.
-- Use exact words from the document provided as much as possible.
-
------------------------------------------
-STYLE GUIDELINES
------------------------------------------
-
-TOPIC TITLES:
-- Professional and structured
-- Avoid casual wording like "About Insurance"
-- Think category-level clarity
-
-QUESTIONS:
-- Must reflect real customer concerns
-- Practical and scenario-driven where possible
-- Avoid generic phrasing like "Explain policy"
-
-ANSWERS:
-- Organized into 3 UI blocks
-- Clear and reassuring tone
-- Informative but crisp
-- No long paragraphs
-- No bullet points
-- Each block should feel scannable on mobile
-
------------------------------------------
-OUTPUT FORMAT
------------------------------------------
-
-Return STRICTLY valid JSON matching this structure:
+OUTPUT: valid JSON only, no markdown, no explanation.
 
 {
   "topics": [
     {
       "topic_id": "string",
       "title": "string",
-      "summary": "string",
       "faqs": [
         {
           "question": "string",
-          "question_variations": [
-            "string",
-            "string",
-            "string",
-            "string"
-          ],
-          "link_id": "string or null",
-          "link_url": "string or null",
-          "answer_blocks": [
-            "string",
-            "string",
-            "string"
-          ],
-          "related": [
-            "string",
-            "string"
-          ]
+          "question_variations": ["string", "string", "string", "string"],
         }
       ]
     }
   ]
 }
-
-Do not include explanations.
-Do not wrap in markdown.
-Return JSON only.
-
 """
 
-    logger.info("Calling LLM for structured FAQ generation...")
 
-    final_prompt = prompt
+def generate_faq_for_chunk(
+    chunk: str,
+    chunk_index: int,
+    total_chunks: int,
+    llm: ChatOpenAI,
+    extra_prompt: Optional[str] = None
+) -> dict:
+    """Generate structured FAQ JSON for a single text chunk."""
+
+    logger.info(f"Processing chunk {chunk_index + 1}/{total_chunks} ({len(chunk)} chars)...")
+
+    structured_llm = llm.with_structured_output(StructuredFAQ)
+
+    user_content = f"DOCUMENT CHUNK {chunk_index + 1} of {total_chunks}:\n\n{chunk}"
     if extra_prompt:
-        final_prompt += "\n\n" + extra_prompt.strip() + "\n"
+        user_content += f"\n\n{extra_prompt.strip()}"
 
-    response = structured_llm.invoke(final_prompt + "\n\nDOCUMENT:\n" + text)
+    messages = [
+        SystemMessage(content=SYSTEM_PROMPT),
+        HumanMessage(content=user_content)
+    ]
 
-    logger.info("LLM structured output received.")
+    response = structured_llm.invoke(messages)
+    result = response.model_dump()
 
-    return response.model_dump()
+    topic_count = len(result.get("topics", []))
+    faq_count = sum(len(t.get("faqs", [])) for t in result.get("topics", []))
+    logger.info(f"  → Chunk {chunk_index + 1}: {topic_count} topics, {faq_count} FAQs generated")
 
+    return result
+
+
+# =====================================================
+# --------- Merge & Deduplicate FAQs -----------------
+# =====================================================
+
+def merge_structured_faqs(faq_list: List[dict]) -> dict:
+    """
+    Merge multiple StructuredFAQ dicts into one.
+    Topics with the same topic_id are merged; their FAQs are combined.
+    Duplicate questions (exact match) are removed.
+    """
+    merged_topics: Dict[str, dict] = {}
+
+    for faq_data in faq_list:
+        for topic in faq_data.get("topics", []):
+            tid = topic["topic_id"]
+
+            if tid not in merged_topics:
+                merged_topics[tid] = {
+                    "topic_id": tid,
+                    "title": topic["title"],
+                    "faqs": []
+                }
+
+            existing_questions = {
+                f["question"].strip().lower()
+                for f in merged_topics[tid]["faqs"]
+            }
+
+            for faq in topic.get("faqs", []):
+                q = faq["question"].strip().lower()
+                if q not in existing_questions:
+                    merged_topics[tid]["faqs"].append(faq)
+                    existing_questions.add(q)
+
+    merged = {"topics": list(merged_topics.values())}
+
+    total_topics = len(merged["topics"])
+    total_faqs = sum(len(t["faqs"]) for t in merged["topics"])
+    logger.info(f"Merged result: {total_topics} topics, {total_faqs} total FAQs")
+
+    return merged
+
+
+# =====================================================
+# --------- Post-process: fix related refs -----------
+# =====================================================
+
+
+
+# =====================================================
+# ---------------- Link Helpers -----------------------
+# =====================================================
 
 def load_links_from_xlsx(xlsx_path: Path) -> List[Dict[str, str]]:
-    """
-    Load link_id/link_url pairs from an XLSX file.
-    Expects first two columns to be: link_id, link_url (header optional).
-    """
     try:
         from openpyxl import load_workbook
     except Exception as e:
@@ -242,12 +297,10 @@ def load_links_from_xlsx(xlsx_path: Path) -> List[Dict[str, str]]:
 
     wb = load_workbook(filename=str(xlsx_path), read_only=True, data_only=True)
     ws = wb.active
-
     rows = list(ws.iter_rows(values_only=True))
     if not rows:
         return []
 
-    # Detect header row
     start_idx = 0
     header = [str(c).strip().lower() if c is not None else "" for c in rows[0]]
     if "link_id" in header or "linkid" in header or "link" in header:
@@ -270,28 +323,22 @@ def add_links_to_faqs(structured_data: dict, link_map: Dict[str, str]) -> dict:
     for topic in structured_data.get("topics", []):
         for faq in topic.get("faqs", []):
             link_id = faq.get("link_id")
-            if link_id:
-                faq["link_url"] = link_map.get(link_id)
-            else:
-                faq["link_url"] = None
-
+            faq["link_url"] = link_map.get(link_id) if link_id else None
     return structured_data
 
 
 def enrich_structured_faq(structured_data: dict, product_name: str) -> dict:
-    """Add stable IDs and normalize question variations."""
+    """Add stable faq_ids and normalize question variations."""
     for topic in structured_data.get("topics", []):
         topic_id = topic.get("topic_id", "").strip()
         for idx, faq in enumerate(topic.get("faqs", [])):
-            faq_id = f"{product_name}_{topic_id}_{idx}"
-            faq["faq_id"] = faq_id
+            faq["faq_id"] = f"{product_name}_{topic_id}_{idx}"
 
-            variations = [v.strip() for v in faq.get("question_variations", []) if v and v.strip()]
-            # Ensure unique, preserve order
             seen = set()
             normalized = []
-            for v in variations:
-                if v not in seen:
+            for v in faq.get("question_variations", []):
+                v = v.strip()
+                if v and v not in seen:
                     normalized.append(v)
                     seen.add(v)
             faq["question_variations"] = normalized
@@ -300,14 +347,14 @@ def enrich_structured_faq(structured_data: dict, product_name: str) -> dict:
 
 
 # =====================================================
-# =====================================================
 # ---------------- Vector Store Embed -----------------
 # =====================================================
 
 def embed_and_store(structured_data: dict,
                     product_name: str,
                     question_vector_store: VectorStore,
-                    rag_vector_store: VectorStore):
+                    rag_vector_store: VectorStore,
+                    raw_chunks: List[str] = None):
 
     logger.info("Preparing documents for embedding...")
 
@@ -322,7 +369,7 @@ def embed_and_store(structured_data: dict,
             question_variations = faq.get("question_variations", [])
             link_id = faq.get("link_id")
 
-            # Question suggestion store: one entry per question/variation
+            # Embed every question + every variation separately for suggestion engine
             all_questions = [faq["question"]] + question_variations
             for q_idx, question_text in enumerate(all_questions):
                 question_documents.append({
@@ -334,70 +381,67 @@ def embed_and_store(structured_data: dict,
                         "topic_name": topic.get("title", ""),
                         "faq_id": faq_id,
                         "question": question_text.strip(),
-                        "link_id": link_id,
-                        "link_url": faq.get("link_url"),
-                        "answer_blocks": faq.get("answer_blocks", []),
-                        "related": faq.get("related", []),
                         "question_type": "original" if q_idx == 0 else "variation",
                         "question_index": q_idx
                     }
                 })
 
-            combined_text = f"""
-            Product: {product_name}
-            Topic: {topic['title']}
-            Question: {faq['question']}
-            Question Variations: {' | '.join(question_variations)}
-            Answer: {' '.join(faq['answer_blocks'])}
-            """
 
-            rag_documents.append({
-                "id": f"{faq_id}_rag",
-                "text": combined_text.strip(),
-                "metadata": {
-                    "product": product_name,
-                    "topic_id": topic_id,
-                    "faq_id": faq_id,
-                    "link_id": link_id,
-                    "link_url": faq.get("link_url"),
-                    "question": faq["question"]
-                }
-            })
 
+            if raw_chunks:
+                rag_documents = [
+                    {
+                        "id": f"{product_name}_chunk_{i}",
+                        "text": chunk.strip(),
+                        "metadata": {
+                            "product": product_name,
+                            "chunk_index": i,
+                        }
+                    }
+                    for i, chunk in enumerate(raw_chunks)
+                ]
+    
     question_vector_store.add_structured_documents(question_documents)
     rag_vector_store.add_structured_documents(rag_documents)
 
-    logger.info("Structured FAQ embedded into question and RAG vector stores.")
+    total_q = len(question_documents)
+    total_r = len(rag_documents)
+    logger.info(f"Embedded {total_q} question docs and {total_r} RAG docs into vector stores.")
 
 
 # =====================================================
 # ---------------------- MAIN -------------------------
 # =====================================================
 
-def run_ingestion(pdf_path: Path,
-                  product_name: str,
-                  reset_vector_store: bool = False) -> None:
+def run_ingestion(
+    pdf_path: Path,
+    product_name: str,
+    reset_vector_store: bool = False,
+    chunk_size: int = 1000,
+    chunk_overlap: int = 200,
+    resume_from_checkpoint: bool = False,
+) -> None:
     """
-    Structured ingestion runner for a specific PDF.
+    Chunked structured ingestion runner.
+
+    resume_from_checkpoint=True:
+      Skips PDF extraction + all LLM calls. Loads the previously saved
+      logs/{product_name}_structured_faq.json and runs only the embedding
+      step. Use this when embedding failed after JSON was already generated.
     """
 
     logger.add("logs/structured_ingestion.log", rotation="1 day")
+    logger.info("Starting chunked structured ingestion...")
+    logger.info(f"PDF: {pdf_path} | Product: {product_name} | resume={resume_from_checkpoint}")
 
-    logger.info("Starting structured ingestion...")
-    logger.info(f"PDF: {pdf_path}")
-    logger.info(f"Product: {product_name}")
+    checkpoint_path = Path("logs") / f"{product_name}_structured_faq.json"
 
-    if not pdf_path.exists():
-        logger.error("PDF file not found.")
-        print("❌ PDF file does not exist.")
-        raise FileNotFoundError(f"PDF file not found: {pdf_path}")
-
-    vector_store = VectorStore(
+    # ── Vector stores ──────────────────────────────────────────────────────────
+    question_vector_store = VectorStore(
         collection_name=settings.chroma_collection_name_questions,
         persist_directory=settings.chroma_persist_directory,
         embedding_model=settings.embedding_model
     )
-
     rag_vector_store = VectorStore(
         collection_name=settings.chroma_collection_name_rag,
         persist_directory=settings.chroma_persist_directory,
@@ -406,50 +450,140 @@ def run_ingestion(pdf_path: Path,
 
     if reset_vector_store:
         logger.warning("Resetting vector stores...")
-        vector_store.reset()
+        question_vector_store.reset()
         rag_vector_store.reset()
 
     try:
-        # Step 1: Extract text
-        logger.info("Extracting text from PDF...")
-        text = extract_full_text(pdf_path)
+        # ══════════════════════════════════════════════════════════════════════
+        # RESUME PATH — skip LLM entirely, load existing JSON checkpoint
+        # ══════════════════════════════════════════════════════════════════════
+        if resume_from_checkpoint:
+            if not checkpoint_path.exists():
+                raise FileNotFoundError(
+                    f"No checkpoint found at {checkpoint_path}. "
+                    "Run without resume_from_checkpoint=True first."
+                )
+            logger.info(f"Resuming from checkpoint: {checkpoint_path}")
+            with open(checkpoint_path, "r", encoding="utf-8") as f:
+                merged_faq = json.load(f)
+            topic_count = len(merged_faq.get("topics", []))
+            faq_count   = sum(len(t["faqs"]) for t in merged_faq["topics"])
+            logger.info(f"Loaded checkpoint: {topic_count} topics, {faq_count} FAQs.")
 
-        # Step 1.5: Load optional link metadata
-        xlsx_candidates = list(Path(settings.data_dir).glob("*.xlsx"))
-        link_items: List[Dict[str, str]] = []
-        if xlsx_candidates:
-            link_items = load_links_from_xlsx(xlsx_candidates[0])
-
-        # Step 2: Generate structured FAQ
-        if link_items:
-            link_ids = ", ".join([li["link_id"] for li in link_items])
-            link_prompt = f"""
-LINK METADATA:
-You may attach a relevant link_id to an FAQ ONLY if it directly helps the answer.
-Use ONLY these link_ids: {link_ids}
-If no link applies, set link_id to null.
-Do not invent ids or urls. Only output link_id; link_url must be null.
-"""
-            structured_faq = generate_structured_faq(text, extra_prompt=link_prompt)
+        # ══════════════════════════════════════════════════════════════════════
+        # FULL PATH — extract → chunk → LLM → merge → save checkpoint
+        # ══════════════════════════════════════════════════════════════════════
         else:
-            structured_faq = generate_structured_faq(text)
-        structured_faq = enrich_structured_faq(structured_faq, product_name)
-        link_map = {li["link_id"]: li["link_url"] for li in link_items if li.get("link_id") and li.get("link_url")}
-        structured_faq = add_links_to_faqs(structured_faq, link_map)
+            if not pdf_path.exists():
+                raise FileNotFoundError(f"PDF file not found: {pdf_path}")
 
-        if len(structured_faq.get("topics", [])) < 10:
-            logger.warning("LLM returned fewer than 10 topics; consider regenerating.")
+            # ── Load optional link metadata ────────────────────────────────
+            xlsx_candidates = list(Path(settings.data_dir).glob("*.xlsx"))
+            link_items: List[Dict[str, str]] = []
+            if xlsx_candidates:
+                link_items = load_links_from_xlsx(xlsx_candidates[0])
+                logger.info(f"Loaded {len(link_items)} link entries from XLSX.")
 
-        # Step 3: Embed into vector DB
+            link_map = {
+                li["link_id"]: li["link_url"]
+                for li in link_items
+                if li.get("link_id") and li.get("link_url")
+            }
+
+            extra_prompt = None
+            if link_items:
+                link_ids = ", ".join([li["link_id"] for li in link_items])
+                extra_prompt = (
+                    "\nLINK METADATA:\n"
+                    "You may attach a relevant link_id to an FAQ ONLY if it directly helps the answer.\n"
+                    f"Use ONLY these link_ids: {link_ids}\n"
+                    "If no link applies, set link_id to null.\n"
+                    "Do not invent ids or urls. Only output link_id; link_url must be null.\n"
+                )
+
+            # ── Step 1: Extract text ───────────────────────────────────────
+            logger.info("Extracting text from PDF...")
+            text = extract_full_text(pdf_path)
+            logger.info(f"Extracted {len(text)} characters from PDF.")
+
+            # ── Step 2: Chunk ──────────────────────────────────────────────
+            chunks = chunk_text(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+
+            # ── Step 3: LLM per chunk ──────────────────────────────────────
+            # ── Step 3: LLM per chunk (parallel) ──────────────────────────────
+            llm = ChatOpenAI(
+                model=settings.openai_model_large,
+                temperature=settings.llm_temperature,
+                api_key=settings.openai_api_key,
+                max_retries=3,
+            )
+
+            all_chunk_faqs = [None] * len(chunks)  # preserve order
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = {
+                    executor.submit(
+                        generate_faq_for_chunk,
+                        chunk=chunk,
+                        chunk_index=i,
+                        total_chunks=len(chunks),
+                        llm=llm,
+                        extra_prompt=extra_prompt
+                    ): i
+                    for i, chunk in enumerate(chunks)
+                }
+                for future in as_completed(futures):
+                    i = futures[future]
+                    result = future.result()
+                    all_chunk_faqs[i] = result
+
+                    # ── Print chunk output for inspection ─────────────────────
+                    print(f"\n{'='*60}")
+                    print(f"CHUNK {i + 1}/{len(chunks)}")
+                    print(f"{'='*60}")
+                    for topic in result.get("topics", []):
+                        print(f"\n  📁 [{topic['topic_id']}] {topic['title']}")
+                        for faq in topic.get("faqs", []):
+                            print(f"     Q: {faq['question']}")
+                            for v in faq.get("question_variations", []):
+                                print(f"        ~ {v}")
+                    print(f"{'='*60}\n")
+
+                    logger.info(f"Chunk {i + 1}/{len(chunks)} completed.",flush=True)
+
+            logger.info(f"All {len(chunks)} chunks processed. Merging...")
+
+            # ── Step 4: Merge + post-process ──────────────────────────────
+            merged_faq = merge_structured_faqs(all_chunk_faqs)
+            merged_faq = enrich_structured_faq(merged_faq, product_name)
+            # merged_faq = add_links_to_faqs(merged_faq, link_map)
+
+            topic_count = len(merged_faq.get("topics", []))
+            faq_count   = sum(len(t["faqs"]) for t in merged_faq["topics"])
+            logger.info(f"Final merged FAQ: {topic_count} topics, {faq_count} FAQs.")
+
+            if topic_count < 10:
+                logger.warning(f"Only {topic_count} topics — consider smaller chunk_size.")
+
+            # ── Step 5: Save checkpoint (always, before embedding) ─────────
+            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(checkpoint_path, "w", encoding="utf-8") as f:
+                json.dump(merged_faq, f, indent=2, ensure_ascii=False)
+            logger.info(f"Checkpoint saved → {checkpoint_path}")
+
+        # ══════════════════════════════════════════════════════════════════════
+        # EMBED (runs in both full and resume paths)
+        # ══════════════════════════════════════════════════════════════════════
         embed_and_store(
-            structured_faq,
+            merged_faq,
             product_name,
-            vector_store,
-            rag_vector_store
+            question_vector_store,
+            rag_vector_store,
+            raw_chunks=chunks
         )
 
-        logger.info("Structured ingestion completed successfully.")
-        print("\n✅ Structured FAQ ingestion complete!")
+        logger.info("Ingestion completed successfully.")
+        print(f"\n✅ Done! {topic_count} topics | {faq_count} FAQs embedded.")
 
     except Exception as e:
         logger.error(f"Ingestion failed: {e}")
@@ -457,9 +591,14 @@ Do not invent ids or urls. Only output link_id; link_url must be null.
         raise
 
 
-if __name__ == "__main__":
-    run_ingestion(
-        pdf_path=Path(settings.pdf_dir),
-        product_name=settings.default_product_name,
-        reset_vector_store=settings.reset_vector_store
-    )
+# if __name__ == "__main__":
+#     run_ingestion(
+#         pdf_path=Path(settings.pdf_dir),
+#         product_name=settings.default_product_name,
+#         reset_vector_store=settings.reset_vector_store,
+#         chunk_size=2000,
+#         chunk_overlap=300,
+#         resume_from_checkpoint=True,   # ← set True to skip LLM and re-embed only
+#     )
+
+

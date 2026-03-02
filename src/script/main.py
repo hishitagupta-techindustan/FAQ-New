@@ -65,9 +65,8 @@ class ChatResponse(BaseModel):
     session_id: str
     source: str                                  # "structured_faq" | "rag"
     topic: Optional[str] = None                  # filled for structured FAQ hits
-    answer_blocks: Optional[List[Any]] = None    # structured blocks (FAQ path)
+
     answer: Optional[str] = None                 # plain-text answer (RAG path)
-    related:Optional[List[str]] = None
     link_id: Optional[str] = None
     link_url: Optional[str] = None
 
@@ -79,14 +78,15 @@ class SessionHistoryResponse(BaseModel):
 
 class SuggestionRequest(BaseModel):
     partial_query: str
-    product: Optional[str] = "zucora"
+    product: Optional[str] = "zucora",
+    is_followup: bool
 
 
 class SuggestionItem(BaseModel):
     question: str
     topic_id: str
     topic_name: str
-    match_type: str   # "keyword" | "semantic" | "both"
+    match_type:   str = "semantic" 
     score: float
 
 
@@ -138,9 +138,7 @@ def chat(request: ChatRequest):
         session_id=session_id,
         source=result.get("source"),
         topic=result.get("topic"),
-        answer_blocks=result.get("answer_blocks"),
         answer=result.get("answer"),
-        related=result.get("related"),
         link_id=result.get("link_id"),
         link_url=result.get("link_url")
     )
@@ -246,6 +244,7 @@ def suggest(request: SuggestionRequest):
         results = suggestion_engine.suggest(
             partial_query=request.partial_query.strip(),
             product=request.product,
+            is_followup=request.is_followup
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

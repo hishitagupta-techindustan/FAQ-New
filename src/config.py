@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     # LLM Settings
    
     llm_temperature: float = 0.0
-    llm_max_tokens: int = 4000
+    llm_max_tokens: int = 8000
     
     # Embeddings
     embedding_model: str = "text-embedding-3-small"
@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     
     # Paths
     data_dir: Path = Path("/home/hishita/Desktop/Projects/FAQ New/data")
-    pdf_dir: Path = Path("/home/hishita/Desktop/Projects/FAQ New/data/pdfs/zucora.pdf")
+    pdf_dir: Path = Path("/home/hishita/Hishita/FAQ New/src/data/uploads/fff7d5dc-de5c-4c47-828c-f1f40acf1e1c_source.pdf")
     
     # Product name
     default_product_name : str ="zucora"

@@ -269,7 +269,7 @@ nav {
 .chat-drawer {
   position:fixed;
   top:0; right:0; bottom:0;
-  width:400px;
+  width:600px;
   background:var(--card);
   z-index:101;
   display:flex; flex-direction:column;
@@ -734,7 +734,7 @@ async function fetchSugg(q) {
     const r = await fetch(`${API}/suggest`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({partial_query: q, product: PRODUCT})
+      body: JSON.stringify({partial_query: q, product: PRODUCT, is_followup:false})
     });
     const data = await r.json();
     if (reqId !== lastRequestId || q !== lastRequestQuery) return;
@@ -825,11 +825,13 @@ function sendMsg() {
 
   callChat(q).then(async result => {
     removeTyping();
+    document.getElementById('send-btn').disabled = false;
+
     if (result.source === 'structured_faq' && result.answer_blocks?.length) {
       addFAQMsg(result.answer_blocks, result.topic);
       if (result.link_url) addLinkBlock(result.link_url, result.link_id);
-      const suggested = (result.related || []).slice(0, 3);
-      if (suggested.length) addSuggestedQuestions(suggested);
+      const followups = await fetchFollowupSuggestions(q, 3);
+      if (followups.length) addSuggestedQuestions(followups);
     } else {
       addBotMsg(result.answer || '⚠️ No answer returned.', result.source || 'rag');
       if (result.link_url) addLinkBlock(result.link_url, result.link_id);
@@ -838,6 +840,7 @@ function sendMsg() {
     }
   }).catch(e => {
     removeTyping();
+    document.getElementById('send-btn').disabled = false;
     addBotMsg('⚠️ Could not reach the server. Make sure FastAPI is running at ' + API, 'error');
   });
 }
@@ -937,7 +940,7 @@ async function fetchFollowupSuggestions(query, limit) {
     const r = await fetch(`${API}/suggest`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({partial_query: query, product: PRODUCT})
+      body: JSON.stringify({partial_query: query, product: PRODUCT, is_followup: true})
     });
     const data = await r.json();
     const suggestions = (data.suggestions || []).map(s => s.question).filter(Boolean);
