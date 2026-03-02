@@ -11,8 +11,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_PROJECT_ROOT))
+# _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# sys.path.insert(0, str(_PROJECT_ROOT))
 
 import uuid
 from typing import Optional, List, Any
@@ -271,7 +271,7 @@ def ingest_pdf(
     elif not pdf_url:
         raise HTTPException(status_code=400, detail="Provide a PDF file or a pdf_url.")
 
-    upload_dir = _PROJECT_ROOT / "data" / "uploads"
+    upload_dir = "data" / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
     max_bytes = 50 * 1024 * 1024  # 50 MB
 
@@ -336,6 +336,6 @@ def ingest_pdf(
 # ---------------------- ENTRY ------------------------
 # =====================================================
 
-# if __name__ == "__main__":
-#     import uvicorn
-#     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

@@ -22,7 +22,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import settings
-from script.vectorstore import VectorStore
+from vectorstore import VectorStore
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
