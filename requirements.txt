@@ -1,0 +1,11 @@
+nltk
+rapidfuzz
+rank-bm25
+cachetools
+loguru
+langchain-openai
+openai
+chromadb
+tiktoken
+numpy
+python-dotenv
