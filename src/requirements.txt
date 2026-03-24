@@ -9,3 +9,7 @@ chromadb
 tiktoken
 numpy
 python-dotenv
+fastapi
+PyMuPDF
+python-multipart
+langchain-text-splitters
